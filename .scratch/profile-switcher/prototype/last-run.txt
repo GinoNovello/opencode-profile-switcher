@@ -1,0 +1,37 @@
+sandbox : /var/folders/tf/_1lsgqn10ts98ljrf8scwwf80000gn/T//oc-proto-YGvlwS
+config  : /var/folders/tf/_1lsgqn10ts98ljrf8scwwf80000gn/T//oc-proto-YGvlwS/config/opencode
+
+serve PID (start): 31492
+
+=== PROBE 1: profile A active ===
+config.model       = alpha-provider/alpha-heavy
+config.small_model = alpha-provider/alpha-small
+agent[build].model = {"modelID":"alpha-heavy","providerID":"alpha-provider"}
+agent[plan].model  = {"modelID":"alpha-heavy","providerID":"alpha-provider"}
+
+=== create a session BEFORE the switch (to prove sessions survive) ===
+created session id = ses_044d77d15ffeb3noS9UE7soFKw
+
+=== SWITCH: persist profile B, then POST /instance/dispose ===
+POST /instance/dispose -> HTTP 200
+waiting for re-bootstrap...
+
+=== PROBE 2: after dispose (NO restart) ===
+config.model       = beta-provider/beta-heavy
+config.small_model = beta-provider/beta-small
+agent[build].model = {"modelID":"beta-heavy","providerID":"beta-provider"}
+agent[plan].model  = {"modelID":"beta-heavy","providerID":"beta-provider"}
+re-bootstrap latency (first flipped read): 31 ms
+
+=== PROCESS IDENTITY ===
+serve PID still alive: 31492
+  31492 00:02 opencode serve --port 45711 --hostname 127.0.0.1 --print-logs
+
+=== SESSION SURVIVAL (created pre-dispose, checked post-dispose) ===
+session ses_044d77d15ffeb3noS9UE7soFKw present after dispose? count=1
+
+=== plugin boot log lines (proves hook re-ran) ===
+  timestamp=2026-08-01T02:30:22.142Z level=INFO run=5a3b5e3d message="BOOT profile=A model=alpha-provider/alpha-heavy small=alpha-provider/alpha-small"
+  timestamp=2026-08-01T02:30:22.226Z level=INFO run=5a3b5e3d message="BOOT profile=B model=beta-provider/beta-heavy small=beta-provider/beta-small"
+
+sandbox left at: /var/folders/tf/_1lsgqn10ts98ljrf8scwwf80000gn/T//oc-proto-YGvlwS (delete when done)
