@@ -50,6 +50,9 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
         run: |
+          # `bun install` can rewrite bun.lock; discard that drift so the tree is
+          # clean and `npm version` (which refuses a dirty tree) can run.
+          git checkout -- bun.lock 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           npm version patch -m "chore(release): v%s [skip ci]"
