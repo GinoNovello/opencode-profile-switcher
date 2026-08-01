@@ -1,6 +1,6 @@
 {
   "name": "opencode-profile-switcher",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "opencode plugin to define model profiles (agent-to-tier assignments) and switch them live from the UI.",
   "license": "MIT",
   "author": "Gino Novello",
