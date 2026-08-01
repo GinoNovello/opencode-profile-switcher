@@ -65,7 +65,11 @@ export const server: Plugin = async ({ client }) => {
   }
 }
 
-export default { server } satisfies PluginModule
+// `id` is REQUIRED when opencode loads this module from an absolute file path
+// (the `plugin` array in opencode.jsonc uses `source: "file"`). Without it,
+// opencode's `resolvePluginId` throws "Path plugin ... must export id" and drops
+// the plugin, so the profile is never applied. See test/plugin-loading.test.ts.
+export default { id: "opencode-profile-switcher", server } satisfies PluginModule
 
 // Public API consumed by the TUI (#18) and downstream tooling.
 export * from "./schema.js"

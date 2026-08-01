@@ -484,4 +484,8 @@ export const tui: TuiPlugin = async (api) => {
   })
 }
 
-export default { tui } satisfies TuiPluginModule
+// `id` is REQUIRED when opencode loads this module from an absolute file path
+// (the `plugin` array in opencode.jsonc uses `source: "file"`). Without it,
+// opencode's `resolvePluginId` throws "Path plugin ... must export id" and drops
+// the plugin, so `/profile` never registers. See test/plugin-loading.test.ts.
+export default { id: "opencode-profile-switcher", tui } satisfies TuiPluginModule
