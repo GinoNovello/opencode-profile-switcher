@@ -1,0 +1,49 @@
+{
+  "name": "opencode-profile-switcher",
+  "version": "0.1.0",
+  "description": "opencode plugin to define model profiles (agent-to-tier assignments) and switch them live from the UI.",
+  "license": "MIT",
+  "author": "Gino Novello",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GinoNovello/opencode-profile-switcher.git"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "profiles",
+    "models",
+    "llm"
+  ],
+  "exports": {
+    "./server": {
+      "import": "./dist/server.js",
+      "types": "./dist/server.d.ts"
+    },
+    "./tui": {
+      "import": "./dist/tui.js",
+      "types": "./dist/tui.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "1.18.10"
+  },
+  "dependencies": {
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.10",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.2"
+  }
+}
