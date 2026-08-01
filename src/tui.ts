@@ -1,4 +1,4 @@
-import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { enumerateAgents, type AgentListerClient } from "./agents.js"
 import { readProfiles, writeProfiles } from "./config.js"
 import {
@@ -484,4 +484,4 @@ export const tui: TuiPlugin = async (api) => {
   })
 }
 
-export default tui
+export default { tui } satisfies TuiPluginModule

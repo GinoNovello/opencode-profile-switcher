@@ -1,5 +1,5 @@
 import type { OpencodeClient } from "@opencode-ai/sdk"
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin, PluginModule } from "@opencode-ai/plugin"
 import { applyProfile, type MutableConfig } from "./apply.js"
 import { readProfiles } from "./config.js"
 
@@ -65,7 +65,7 @@ export const server: Plugin = async ({ client }) => {
   }
 }
 
-export default server
+export default { server } satisfies PluginModule
 
 // Public API consumed by the TUI (#18) and downstream tooling.
 export * from "./schema.js"
