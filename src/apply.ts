@@ -25,9 +25,9 @@ export interface ApplyOptions {
   /**
    * Agent names to apply tiers to, typically enumerated at runtime via
    * `client.app.agents()` (see `enumerateAgentNames`). When omitted, the set is
-   * derived from the assignment keys plus whatever already exists in
-   * `cfg.agent` — the best a `config` hook can do, since it runs before the
-   * built-in agents are enumerable.
+   * derived from the active profile's placement keys plus whatever already
+   * exists in `cfg.agent` — the best a `config` hook can do, since it runs
+   * before the built-in agents are enumerable.
    */
   agents?: string[]
 }
@@ -42,8 +42,9 @@ export interface ApplyResult {
   /** Agents whose model was written. */
   changedAgents: string[]
   /**
-   * Agents that had no explicit assignment and fell back to the `rest` tier.
-   * Surface these to the user (toast) suggesting they run the wizard.
+   * Agents absent from the active profile's placements that fell back to the
+   * `rest` tier. Surface these to the user (toast) suggesting they run the
+   * wizard to place them explicitly.
    */
   unassigned: string[]
 }
@@ -64,12 +65,12 @@ function applyTier(target: MutableAgentConfig, profile: Profile, tier: TierName)
 /**
  * Apply the active profile onto a resolved opencode config, in place.
  *
- * Rules (decisions #11, #13):
+ * Rules:
  * - `cfg.model` = heavy tier model; `cfg.small_model` = rest tier model.
- * - Each considered agent gets the model of its assigned tier.
- * - Excluded agents are left completely untouched.
- * - An agent with no assignment falls back to the `rest` tier and is reported
- *   in `unassigned` (never breaks the switch).
+ * - Each considered agent gets the model of its placement in the active profile.
+ * - Agents the profile places as `excluded` are left completely untouched.
+ * - An agent absent from the profile's placements falls back to the `rest` tier
+ *   and is reported in `unassigned` (never breaks the switch).
  *
  * Pure except for the in-place mutation of `cfg`; returns a report for toasts.
  */
@@ -94,23 +95,22 @@ export function applyProfile(
 
   const agentConfig = (cfg.agent ??= {})
 
-  // Consider the union of: runtime-enumerated agents, assigned agents, and any
-  // agents already present in the config.
+  // Consider the union of: runtime-enumerated agents, the profile's placed
+  // agents, and any agents already present in the config.
   const names = new Set<string>()
   for (const name of options.agents ?? []) names.add(name)
-  for (const name of Object.keys(profiles.assignment)) names.add(name)
+  for (const name of Object.keys(profile.placements)) names.add(name)
   for (const name of Object.keys(agentConfig)) names.add(name)
 
-  const exclusions = new Set(profiles.exclusions)
   const changedAgents: string[] = []
   const unassigned: string[] = []
 
   for (const name of names) {
-    if (exclusions.has(name)) continue
+    const placement = profile.placements[name]
+    if (placement === "excluded") continue
 
-    const assigned = profiles.assignment[name]
-    const tier: TierName = assigned ?? "rest"
-    if (!assigned) unassigned.push(name)
+    const tier: TierName = placement ?? "rest"
+    if (!placement) unassigned.push(name)
 
     const target = (agentConfig[name] ??= {})
     applyTier(target, profile, tier)

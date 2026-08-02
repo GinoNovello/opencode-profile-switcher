@@ -1,18 +1,19 @@
 import { describe, expect, test } from "bun:test"
 import type { AgentInfo } from "../src/agents.js"
-import type { Profile, ProfilesFile } from "../src/schema.js"
+import type { Placement, Profile, ProfilesFile } from "../src/schema.js"
 import {
-  buildAssignmentOptions,
+  buildPlacementOptions,
   buildProfile,
   commitProfile,
-  defaultAssignment,
+  copyPlacements,
   defaultPlacement,
+  defaultPlacements,
   deleteProfile,
   nextPlacement,
   placementOf,
   renameProfile,
   setPlacement,
-  updateProfileModels,
+  updateProfile,
   validateProfileName,
 } from "../src/wizard.js"
 
@@ -23,13 +24,15 @@ const agents: AgentInfo[] = [
   { name: "summarizer", mode: "subagent", hidden: true },
 ]
 
+const glm: Profile = {
+  heavy: { model: "zai/glm-5" },
+  rest: { model: "zai/glm-4" },
+  placements: { build: "heavy", explore: "rest", vision: "excluded" },
+}
+
 function makeFile(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
   return {
-    assignment: { build: "heavy", explore: "rest" },
-    exclusions: ["vision"],
-    profiles: {
-      glm: { heavy: { model: "zai/glm-5" }, rest: { model: "zai/glm-4" } },
-    },
+    profiles: { glm },
     active: "glm",
     ...overrides,
   }
@@ -43,9 +46,9 @@ describe("defaultPlacement", () => {
     expect(defaultPlacement({ name: "x", mode: "primary", hidden: true })).toBe("rest"))
 })
 
-describe("defaultAssignment", () => {
-  test("assigns every agent a tier per the defaults", () => {
-    expect(defaultAssignment(agents)).toEqual({
+describe("defaultPlacements", () => {
+  test("primary/primary-capable -> heavy, subagents/hidden -> rest", () => {
+    expect(defaultPlacements(agents)).toEqual({
       build: "heavy",
       plan: "heavy",
       explore: "rest",
@@ -55,13 +58,13 @@ describe("defaultAssignment", () => {
 })
 
 describe("placement editing", () => {
-  const file = makeFile()
+  const placements: Record<string, Placement> = { build: "heavy", explore: "rest", vision: "excluded" }
 
-  test("placementOf reads assignment and exclusions", () => {
-    expect(placementOf(file, "build")).toBe("heavy")
-    expect(placementOf(file, "explore")).toBe("rest")
-    expect(placementOf(file, "vision")).toBe("excluded")
-    expect(placementOf(file, "unknown")).toBe("rest")
+  test("placementOf reads placements, defaulting absent agents to rest", () => {
+    expect(placementOf(placements, "build")).toBe("heavy")
+    expect(placementOf(placements, "explore")).toBe("rest")
+    expect(placementOf(placements, "vision")).toBe("excluded")
+    expect(placementOf(placements, "unknown")).toBe("rest")
   })
 
   test("nextPlacement cycles heavy -> rest -> excluded -> heavy", () => {
@@ -70,31 +73,44 @@ describe("placement editing", () => {
     expect(nextPlacement("excluded")).toBe("heavy")
   })
 
-  test("setPlacement to excluded moves the agent into exclusions", () => {
-    const next = setPlacement(file, "build", "excluded")
-    expect(next.assignment.build).toBeUndefined()
-    expect(next.exclusions).toContain("build")
+  test("setPlacement to excluded records the exclusion", () => {
+    const next = setPlacement(placements, "build", "excluded")
+    expect(next.build).toBe("excluded")
   })
 
-  test("setPlacement to a tier removes it from exclusions", () => {
-    const next = setPlacement(file, "vision", "heavy")
-    expect(next.exclusions).not.toContain("vision")
-    expect(next.assignment.vision).toBe("heavy")
+  test("setPlacement to a tier replaces an exclusion", () => {
+    const next = setPlacement(placements, "vision", "heavy")
+    expect(next.vision).toBe("heavy")
   })
 
   test("setPlacement does not mutate the input", () => {
-    setPlacement(file, "build", "excluded")
-    expect(file.assignment.build).toBe("heavy")
-    expect(file.exclusions).toEqual(["vision"])
+    setPlacement(placements, "build", "excluded")
+    expect(placements.build).toBe("heavy")
+    expect(placements.vision).toBe("excluded")
   })
 })
 
-describe("buildAssignmentOptions", () => {
+describe("copyPlacements", () => {
+  test("copies a profile's placements, including exclusions", () => {
+    expect(copyPlacements(glm)).toEqual({ build: "heavy", explore: "rest", vision: "excluded" })
+  })
+  test("returns a detached copy", () => {
+    const copy = copyPlacements(glm)
+    copy.build = "rest"
+    expect(glm.placements.build).toBe("heavy")
+  })
+})
+
+describe("buildPlacementOptions", () => {
   test("one row per agent plus a Done row", () => {
-    const options = buildAssignmentOptions(makeFile(), agents)
+    const options = buildPlacementOptions(glm.placements, agents)
     expect(options).toHaveLength(agents.length + 1)
     expect(options.at(-1)?.value).toEqual({ kind: "done" })
     expect(options[0]).toMatchObject({ value: { kind: "agent", name: "build" }, description: "→ heavy" })
+  })
+  test("agents absent from placements show as rest", () => {
+    const options = buildPlacementOptions(glm.placements, agents)
+    expect(options[1]).toMatchObject({ value: { kind: "agent", name: "plan" }, description: "→ rest" })
   })
 })
 
@@ -107,38 +123,28 @@ describe("validateProfileName", () => {
 })
 
 describe("buildProfile", () => {
-  test("includes a heavy variant when given", () => {
-    expect(buildProfile("zai/glm-5", "zai/glm-4", "max")).toEqual({
+  test("assembles models and placements, with a heavy variant when given", () => {
+    const placements: Record<string, Placement> = { build: "heavy" }
+    expect(buildProfile("zai/glm-5", "zai/glm-4", placements, "max")).toEqual({
       heavy: { model: "zai/glm-5", variant: "max" },
       rest: { model: "zai/glm-4" },
+      placements: { build: "heavy" },
     })
   })
-  test("omits the variant when empty", () => {
-    const p = buildProfile("zai/glm-5", "zai/glm-4", "")
+  test("omits the variant when empty and defaults placements to empty", () => {
+    const p = buildProfile("zai/glm-5", "zai/glm-4", {}, "")
     expect(p.heavy).toEqual({ model: "zai/glm-5" })
+    expect(p.placements).toEqual({})
   })
 })
 
 describe("commitProfile", () => {
-  const profile: Profile = { heavy: { model: "a/b" }, rest: { model: "a/c" } }
+  const profile: Profile = { heavy: { model: "a/b" }, rest: { model: "a/c" }, placements: {} }
 
-  test("adds the profile, sets it active, keeps shared maps by default", () => {
-    const file = makeFile()
-    const next = commitProfile(file, { name: "new", profile })
+  test("adds the profile and sets it active by default", () => {
+    const next = commitProfile(makeFile(), { name: "new", profile })
     expect(next.profiles.new).toEqual(profile)
     expect(next.active).toBe("new")
-    expect(next.assignment).toBe(file.assignment)
-  })
-
-  test("replaces shared maps when provided (first-run)", () => {
-    const next = commitProfile(makeFile(), {
-      name: "new",
-      profile,
-      assignment: { agent: "heavy" },
-      exclusions: ["x"],
-    })
-    expect(next.assignment).toEqual({ agent: "heavy" })
-    expect(next.exclusions).toEqual(["x"])
   })
 
   test("setActive:false keeps the previous active", () => {
@@ -169,22 +175,24 @@ describe("deleteProfile", () => {
   test("keeps active when a different profile is deleted", () => {
     const file = makeFile({
       profiles: {
-        glm: { heavy: { model: "a/b" }, rest: { model: "a/c" } },
-        other: { heavy: { model: "d/e" }, rest: { model: "d/f" } },
+        glm,
+        other: { heavy: { model: "d/e" }, rest: { model: "d/f" }, placements: {} },
       },
     })
     expect(deleteProfile(file, "other").active).toBe("glm")
   })
 })
 
-describe("updateProfileModels", () => {
-  test("replaces the model slots", () => {
-    const p: Profile = { heavy: { model: "x/y" }, rest: { model: "x/z" } }
-    const next = updateProfileModels(makeFile(), "glm", p)
+describe("updateProfile", () => {
+  test("replaces the whole profile (models and placements)", () => {
+    const p: Profile = { heavy: { model: "x/y" }, rest: { model: "x/z" }, placements: { build: "rest" } }
+    const next = updateProfile(makeFile(), "glm", p)
     expect(next.profiles.glm).toEqual(p)
   })
   test("no-op for an unknown profile", () => {
     const file = makeFile()
-    expect(updateProfileModels(file, "nope", { heavy: { model: "a/b" }, rest: { model: "a/c" } })).toEqual(file)
+    expect(
+      updateProfile(file, "nope", { heavy: { model: "a/b" }, rest: { model: "a/c" }, placements: {} }),
+    ).toEqual(file)
   })
 })

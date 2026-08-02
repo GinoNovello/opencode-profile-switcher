@@ -4,36 +4,43 @@ import { emptyProfilesFile, profilesFileSchema } from "../src/schema.js"
 describe("profilesFileSchema", () => {
   test("parses a fully valid file", () => {
     const input = {
-      assignment: { build: "heavy", explore: "rest" },
-      exclusions: ["vision"],
       profiles: {
         glm: {
           heavy: { model: "zai-coding-plan/glm-5.2", variant: "max" },
           rest: { model: "zai-coding-plan/glm-4.7" },
+          placements: { build: "heavy", explore: "rest", vision: "excluded" },
         },
       },
       active: "glm",
     }
     const parsed = profilesFileSchema.parse(input)
-    expect(parsed.assignment.build).toBe("heavy")
+    expect(parsed.profiles.glm.placements.build).toBe("heavy")
+    expect(parsed.profiles.glm.placements.vision).toBe("excluded")
     expect(parsed.profiles.glm.heavy.variant).toBe("max")
     expect(parsed.active).toBe("glm")
   })
 
   test("fills defaults for a partial file", () => {
     const parsed = profilesFileSchema.parse({ active: "x" })
-    expect(parsed.assignment).toEqual({})
-    expect(parsed.exclusions).toEqual([])
     expect(parsed.profiles).toEqual({})
     expect(parsed.active).toBe("x")
+  })
+
+  test("defaults placements to an empty map on a profile", () => {
+    const parsed = profilesFileSchema.parse({
+      profiles: { p: { heavy: { model: "a/b" }, rest: { model: "a/c" } } },
+    })
+    expect(parsed.profiles.p.placements).toEqual({})
   })
 
   test("parses an empty object into empty state", () => {
     expect(profilesFileSchema.parse({})).toEqual(emptyProfilesFile())
   })
 
-  test("rejects an invalid tier value in assignment", () => {
-    const result = profilesFileSchema.safeParse({ assignment: { build: "medium" } })
+  test("rejects an invalid placement value", () => {
+    const result = profilesFileSchema.safeParse({
+      profiles: { p: { heavy: { model: "a/b" }, rest: { model: "a/c" }, placements: { build: "medium" } } },
+    })
     expect(result.success).toBe(false)
   })
 

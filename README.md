@@ -52,12 +52,14 @@ not register either entrypoint with opencode.
 
 Run **`/profile`** in opencode:
 
-- **First time** (no profiles yet) → a setup wizard runs: it proposes a default
-  agent→tier assignment (primary agents to `heavy`, everything else to `rest`),
-  which you can accept or tweak, then asks for a profile name and a model for each
-  tier (from your connected providers).
+- **First time** (no profiles yet) → a setup wizard runs: it proposes default
+  agent placements (primary agents to `heavy`, everything else to `rest`), which
+  you can accept or tweak, then asks for a profile name and a model for each tier
+  (from your connected providers).
 - **After that** → `/profile` opens a fuzzy picker: pick a profile to switch to
-  it live, or use **＋ New profile** / **⚙ Configure…** to manage them.
+  it live, or use **＋ New profile** / **⚙ Configure…** to manage them. Creating a
+  new profile copies the active profile's placements (so you don't re-classify
+  every agent) but asks for fresh `heavy`/`rest` models.
 
 Switching a profile applies its models to `model`, `small_model` and every agent,
 then reloads the running instance in place — your open sessions survive and no
@@ -71,16 +73,17 @@ manual restart is needed.
 
 ## How a profile works
 
-A **profile** is one model per **tier**. There are two tiers:
+A **profile** owns one model per **tier** plus its own agent **placements**.
+There are two tiers:
 
 - **`heavy`** — reasoning / orchestration agents (and the global `model`).
 - **`rest`** — everything else (and the global `small_model`).
 
-The **agent→tier assignment** is defined once and shared across all profiles, so
-adding a new profile costs two choices (a heavy model and a rest model), not one
-per agent. Agents can be **excluded** so the switch never touches them (e.g. a
-vision agent that needs a specific multimodal model). An agent with no assignment
-falls back to `rest`.
+Each profile places every agent in `heavy`, `rest`, or **`excluded`** (the switch
+never touches that agent's model — e.g. a vision agent that needs a specific
+multimodal model). Placements belong to the profile, so the same agent can be
+`heavy` in one profile, `rest` in another and `excluded` in a third. An agent
+absent from the active profile's placements falls back to `rest` and is reported.
 
 ## Configuration
 
@@ -89,32 +92,28 @@ but you can also edit it by hand:
 
 ```json
 {
-  "assignment": {
-    "build": "heavy",
-    "plan": "heavy",
-    "general": "heavy",
-    "explore": "rest"
-  },
-  "exclusions": ["vision"],
   "profiles": {
     "xai": {
       "heavy": { "model": "xai/grok-4.5", "variant": "high" },
-      "rest": { "model": "xai/grok-4.20-0309-non-reasoning" }
+      "rest": { "model": "xai/grok-4.20-0309-non-reasoning" },
+      "placements": { "build": "heavy", "plan": "heavy", "explore": "rest", "vision": "excluded" }
     },
     "glm": {
       "heavy": { "model": "zai-coding-plan/glm-5.2", "variant": "max" },
-      "rest": { "model": "zai-coding-plan/glm-4.7" }
+      "rest": { "model": "zai-coding-plan/glm-4.7" },
+      "placements": { "build": "heavy", "explore": "rest", "vision": "excluded" }
     }
   },
   "active": "xai"
 }
 ```
 
-- `assignment` — shared agent → tier (`heavy` | `rest`) map.
-- `exclusions` — agents the switch never modifies.
-- `profiles` — named profiles, each `{ heavy: { model, variant? }, rest: { model } }`.
-  `variant` is an optional per-model variant (e.g. a reasoning-effort flavour) and
-  applies to the `heavy` slot.
+- `profiles` — named profiles, each
+  `{ heavy: { model, variant? }, rest: { model }, placements }`. `variant` is an
+  optional per-model variant (e.g. a reasoning-effort flavour) and applies to the
+  `heavy` slot.
+- `placements` — this profile's agent → placement (`heavy` | `rest` | `excluded`)
+  map. Owned by the profile, so it can differ between profiles.
 - `active` — the currently applied profile. The plugin re-applies it on every
   start.
 

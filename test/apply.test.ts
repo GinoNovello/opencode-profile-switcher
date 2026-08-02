@@ -4,12 +4,11 @@ import type { ProfilesFile } from "../src/schema.js"
 
 function makeProfiles(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
   return {
-    assignment: { build: "heavy", plan: "heavy", explore: "rest" },
-    exclusions: ["vision"],
     profiles: {
       glm: {
         heavy: { model: "zai/glm-5", variant: "max" },
         rest: { model: "zai/glm-4" },
+        placements: { build: "heavy", plan: "heavy", explore: "rest", vision: "excluded" },
       },
     },
     active: "glm",
@@ -53,7 +52,28 @@ describe("applyProfile", () => {
     expect(result.changedAgents).not.toContain("vision")
   })
 
-  test("unassigned agent falls back to rest and is reported", () => {
+  test("the same agent can be placed differently per profile", () => {
+    const profiles: ProfilesFile = {
+      profiles: {
+        glm: {
+          heavy: { model: "zai/glm-5" },
+          rest: { model: "zai/glm-4" },
+          placements: { build: "heavy" },
+        },
+        grok: {
+          heavy: { model: "xai/grok-heavy" },
+          rest: { model: "xai/grok-mini" },
+          placements: { build: "rest" },
+        },
+      },
+      active: "grok",
+    }
+    const cfg: MutableConfig = {}
+    applyProfile(cfg, profiles)
+    expect(cfg.agent?.build).toEqual({ model: "xai/grok-mini" })
+  })
+
+  test("an agent absent from the active profile falls back to rest and is reported", () => {
     const cfg: MutableConfig = {}
     const result = applyProfile(cfg, makeProfiles(), { agents: ["custom-agent"] })
     expect(cfg.agent?.["custom-agent"]).toEqual({ model: "zai/glm-4" })
@@ -90,7 +110,11 @@ describe("applyProfile", () => {
   test("heavy profile without variant does not add one", () => {
     const profiles = makeProfiles({
       profiles: {
-        glm: { heavy: { model: "xai/grok-heavy" }, rest: { model: "xai/grok-mini" } },
+        glm: {
+          heavy: { model: "xai/grok-heavy" },
+          rest: { model: "xai/grok-mini" },
+          placements: { build: "heavy" },
+        },
       },
     })
     const cfg: MutableConfig = {}

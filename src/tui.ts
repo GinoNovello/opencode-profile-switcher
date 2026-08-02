@@ -19,17 +19,19 @@ import type { ProfilesFile } from "./schema.js"
 import type { SelectOption } from "./select.js"
 import { switchProfile, type DisposableClient } from "./switch.js"
 import {
-  buildAssignmentOptions,
+  buildPlacementOptions,
   buildProfile,
   commitProfile,
-  defaultAssignment,
+  copyPlacements,
+  defaultPlacements,
   deleteProfile,
   nextPlacement,
   placementOf,
   renameProfile,
   setPlacement,
-  updateProfileModels,
+  updateProfile,
   validateProfileName,
+  type Placements,
 } from "./wizard.js"
 
 /**
@@ -215,31 +217,29 @@ function pickModels(
 }
 
 /**
- * The assignment/exclusion editor: cycle each agent heavy → rest → excluded,
- * then "Done". Loops by re-rendering the dialog after each change.
+ * The per-profile placement editor: cycle each agent heavy → rest → excluded,
+ * then "Done". Loops by re-rendering the dialog after each change. When agents
+ * cannot be enumerated it keeps the initial placements so the flow never blocks.
  */
-async function editAssignment(
+async function editPlacements(
   ctx: Ctx,
-  initial: Pick<ProfilesFile, "assignment" | "exclusions">,
-  onDone: (maps: Pick<ProfilesFile, "assignment" | "exclusions">) => void,
+  initial: Placements,
+  onDone: (placements: Placements) => void,
 ): Promise<void> {
   const agents = await enumerateAgents(ctx.api.client as unknown as AgentListerClient)
 
   if (agents.length === 0) {
-    toast(ctx, "warning", "Could not enumerate agents — keeping the current assignment.")
+    toast(ctx, "warning", "Could not enumerate agents — keeping the current placements.")
     onDone(initial)
     return
   }
 
-  let working: Pick<ProfilesFile, "assignment" | "exclusions"> = {
-    assignment: { ...initial.assignment },
-    exclusions: [...initial.exclusions],
-  }
+  let working: Placements = { ...initial }
 
   const render = () => {
     showSelect(ctx, {
-      title: "Assignment — select an agent to cycle heavy → rest → excluded",
-      options: buildAssignmentOptions(working, agents),
+      title: "Placements — select an agent to cycle heavy → rest → excluded",
+      options: buildPlacementOptions(working, agents),
       onSelect: (value) => {
         if (value.kind === "done") {
           onDone(working)
@@ -268,23 +268,18 @@ function pickProfile(
 
 // --- wizards ----------------------------------------------------------------
 
-/** First-run wizard: build the shared assignment, then name + models. */
+/** First-run wizard: default placements → review → name → models. */
 async function runFirstRunWizard(ctx: Ctx): Promise<void> {
   const agents = await enumerateAgents(ctx.api.client as unknown as AgentListerClient)
-  const initial: Pick<ProfilesFile, "assignment" | "exclusions"> = {
-    assignment: defaultAssignment(agents),
-    exclusions: [],
-  }
+  const initial = defaultPlacements(agents)
 
-  const toDetails = (maps: Pick<ProfilesFile, "assignment" | "exclusions">) => {
+  const toDetails = (placements: Placements) => {
     promptName(ctx, [], undefined, (name) => {
       pickModels(ctx, (heavy, rest, variant) => {
         const base = readProfiles(ctx.path).profiles
         const next = commitProfile(base, {
           name,
-          profile: buildProfile(heavy, rest, variant),
-          assignment: maps.assignment,
-          exclusions: maps.exclusions,
+          profile: buildProfile(heavy, rest, placements, variant),
           setActive: true,
         })
         void persistAndSwitch(ctx, next, name)
@@ -297,37 +292,41 @@ async function runFirstRunWizard(ctx: Ctx): Promise<void> {
     return
   }
 
-  const heavyCount = Object.values(initial.assignment).filter((tier) => tier === "heavy").length
+  const heavyCount = Object.values(initial).filter((placement) => placement === "heavy").length
   const restCount = agents.length - heavyCount
   showConfirm(ctx, {
     title: "Set up profiles",
-    message: `Default assignment: ${heavyCount} primary agent(s) → heavy, ${restCount} other(s) → rest. Customize it?`,
-    onConfirm: () => void editAssignment(ctx, initial, toDetails),
+    message: `Default placements: ${heavyCount} primary agent(s) → heavy, ${restCount} other(s) → rest. Customize it?`,
+    onConfirm: () => void editPlacements(ctx, initial, toDetails),
     onCancel: () => toDetails(initial),
   })
 }
 
-/** New-profile wizard: reuse the shared assignment, ask name + models only. */
+/**
+ * New-profile wizard: copy the active profile's placements (decision #20),
+ * review them, then require fresh heavy/rest models (decision #21).
+ */
 function runNewProfileWizard(ctx: Ctx, file: ProfilesFile): void {
+  const activeProfile = file.profiles[file.active]
+  const seed: Placements = activeProfile ? copyPlacements(activeProfile) : {}
+
   promptName(ctx, Object.keys(file.profiles), undefined, (name) => {
-    pickModels(ctx, (heavy, rest, variant) => {
-      const next = commitProfile(file, {
-        name,
-        profile: buildProfile(heavy, rest, variant),
-        setActive: true,
+    void editPlacements(ctx, seed, (placements) => {
+      pickModels(ctx, (heavy, rest, variant) => {
+        const next = commitProfile(file, {
+          name,
+          profile: buildProfile(heavy, rest, placements, variant),
+          setActive: true,
+        })
+        void persistAndSwitch(ctx, next, name)
       })
-      void persistAndSwitch(ctx, next, name)
     })
   })
 }
 
 // --- configure menu ---------------------------------------------------------
 
-type ConfigAction =
-  | { kind: "edit" }
-  | { kind: "rename" }
-  | { kind: "delete" }
-  | { kind: "assignment" }
+type ConfigAction = { kind: "edit" } | { kind: "rename" } | { kind: "delete" }
 
 /** Persist a configure edit and re-apply live if it changed the active profile. */
 async function saveConfigEdit(ctx: Ctx, next: ProfilesFile, affectsActive: boolean): Promise<void> {
@@ -340,19 +339,21 @@ async function saveConfigEdit(ctx: Ctx, next: ProfilesFile, affectsActive: boole
 }
 
 function openConfigureMenu(ctx: Ctx, file: ProfilesFile): void {
-  const options: SelectOption<ConfigAction>[] = []
-  if (Object.keys(file.profiles).length > 0) {
-    options.push(
-      { title: "Edit models…", value: { kind: "edit" }, description: "Change a profile's heavy/rest models" },
-      { title: "Rename profile…", value: { kind: "rename" } },
-      { title: "Delete profile…", value: { kind: "delete" } },
-    )
+  if (Object.keys(file.profiles).length === 0) {
+    toast(ctx, "info", "No profiles yet — create one first.")
+    closeDialogs(ctx)
+    return
   }
-  options.push({
-    title: "Adjust assignment / exclusions…",
-    value: { kind: "assignment" },
-    description: "Shared agent → tier map",
-  })
+
+  const options: SelectOption<ConfigAction>[] = [
+    {
+      title: "Edit profile…",
+      value: { kind: "edit" },
+      description: "Review a profile's placements and models",
+    },
+    { title: "Rename profile…", value: { kind: "rename" } },
+    { title: "Delete profile…", value: { kind: "delete" } },
+  ]
 
   showSelect<ConfigAction>(ctx, {
     title: "Configure profiles",
@@ -361,9 +362,13 @@ function openConfigureMenu(ctx: Ctx, file: ProfilesFile): void {
       switch (action.kind) {
         case "edit":
           pickProfile(ctx, file, "Edit which profile?", (name) => {
-            pickModels(ctx, (heavy, rest, variant) => {
-              const next = updateProfileModels(file, name, buildProfile(heavy, rest, variant))
-              void saveConfigEdit(ctx, next, name === file.active)
+            const profile = file.profiles[name]
+            if (!profile) return
+            void editPlacements(ctx, copyPlacements(profile), (placements) => {
+              pickModels(ctx, (heavy, rest, variant) => {
+                const next = updateProfile(file, name, buildProfile(heavy, rest, placements, variant))
+                void saveConfigEdit(ctx, next, name === file.active)
+              })
             })
           })
           break
@@ -387,12 +392,6 @@ function openConfigureMenu(ctx: Ctx, file: ProfilesFile): void {
                 closeDialogs(ctx)
               },
             })
-          })
-          break
-        case "assignment":
-          void editAssignment(ctx, file, (maps) => {
-            const next: ProfilesFile = { ...file, ...maps }
-            void saveConfigEdit(ctx, next, true)
           })
           break
       }

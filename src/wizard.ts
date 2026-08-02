@@ -1,41 +1,44 @@
 import type { AgentInfo } from "./agents.js"
-import type { Profile, ProfilesFile, TierName } from "./schema.js"
+import type { Placement, Profile, ProfilesFile } from "./schema.js"
 import type { SelectOption } from "./select.js"
 
-/**
- * The wizard's per-agent placement: either a capability tier or "excluded"
- * (the switch never touches that agent's model). This is what the assignment
- * editor cycles an agent through.
- */
-export type Placement = TierName | "excluded"
+export type { Placement } from "./schema.js"
+
+/** A profile's agent → placement map. */
+export type Placements = Record<string, Placement>
 
 /**
- * Default placement for one enumerated agent (decision #15): primary agents go
- * to `heavy`; subagents and hidden agents go to `rest`. Nothing is excluded by
- * default. `mode: "all"` is primary-capable, so it is treated as `heavy`.
+ * Default placement for one enumerated agent: primary agents go to `heavy`;
+ * subagents and hidden agents go to `rest`. Nothing is excluded by default.
+ * `mode: "all"` is primary-capable, so it is treated as `heavy`.
  */
-export function defaultPlacement(agent: AgentInfo): TierName {
+export function defaultPlacement(agent: AgentInfo): Placement {
   if (agent.hidden) return "rest"
   return agent.mode === "primary" || agent.mode === "all" ? "heavy" : "rest"
 }
 
-/** Build the shared agent→tier assignment map from enumerated agents. */
-export function defaultAssignment(agents: readonly AgentInfo[]): Record<string, TierName> {
-  const assignment: Record<string, TierName> = {}
-  for (const agent of agents) assignment[agent.name] = defaultPlacement(agent)
-  return assignment
+/**
+ * Build the default placement map for a fresh (first) profile from the
+ * enumerated agents. Primary/primary-capable agents land in `heavy`; subagents
+ * and hidden agents land in `rest`.
+ */
+export function defaultPlacements(agents: readonly AgentInfo[]): Placements {
+  const placements: Placements = {}
+  for (const agent of agents) placements[agent.name] = defaultPlacement(agent)
+  return placements
 }
 
-/** Resolve an agent's current placement given an assignment + exclusion list. */
-export function placementOf(
-  file: Pick<ProfilesFile, "assignment" | "exclusions">,
-  name: string,
-): Placement {
-  if (file.exclusions.includes(name)) return "excluded"
-  return file.assignment[name] ?? "rest"
+/** Copy a profile's placements (including exclusions) into a detached map. */
+export function copyPlacements(profile: Profile): Placements {
+  return { ...profile.placements }
 }
 
-/** Cycle a placement heavy → rest → excluded → heavy for the assignment editor. */
+/** Resolve an agent's placement, defaulting an absent agent to the `rest` tier. */
+export function placementOf(placements: Placements, name: string): Placement {
+  return placements[name] ?? "rest"
+}
+
+/** Cycle a placement heavy → rest → excluded → heavy for the placement editor. */
 export function nextPlacement(current: Placement): Placement {
   switch (current) {
     case "heavy":
@@ -47,26 +50,9 @@ export function nextPlacement(current: Placement): Placement {
   }
 }
 
-/**
- * Apply a placement to an agent, returning a new (assignment, exclusions) pair.
- * "excluded" removes the assignment and adds the name to exclusions; a tier does
- * the inverse.
- */
-export function setPlacement(
-  file: Pick<ProfilesFile, "assignment" | "exclusions">,
-  name: string,
-  placement: Placement,
-): Pick<ProfilesFile, "assignment" | "exclusions"> {
-  const assignment = { ...file.assignment }
-  const exclusions = file.exclusions.filter((agent) => agent !== name)
-
-  if (placement === "excluded") {
-    delete assignment[name]
-    exclusions.push(name)
-  } else {
-    assignment[name] = placement
-  }
-  return { assignment, exclusions }
+/** Set an agent's placement, returning a new placement map (input untouched). */
+export function setPlacement(placements: Placements, name: string, placement: Placement): Placements {
+  return { ...placements, [name]: placement }
 }
 
 const PLACEMENT_LABEL: Record<Placement, string> = {
@@ -76,26 +62,23 @@ const PLACEMENT_LABEL: Record<Placement, string> = {
 }
 
 /**
- * Options for the assignment editor: one row per agent showing its current
+ * Options for the placement editor: one row per agent showing its current
  * placement, plus a trailing "Done" row. Selecting an agent row cycles its
  * placement; selecting "Done" leaves the editor.
  */
-export function buildAssignmentOptions(
-  file: Pick<ProfilesFile, "assignment" | "exclusions">,
+export function buildPlacementOptions(
+  placements: Placements,
   agents: readonly AgentInfo[],
 ): SelectOption<{ kind: "agent"; name: string } | { kind: "done" }>[] {
   const options: SelectOption<{ kind: "agent"; name: string } | { kind: "done" }>[] = agents.map(
-    (agent) => {
-      const placement = placementOf(file, agent.name)
-      return {
-        title: agent.name,
-        value: { kind: "agent" as const, name: agent.name },
-        description: `→ ${PLACEMENT_LABEL[placement]}`,
-        category: "Agents",
-      }
-    },
+    (agent) => ({
+      title: agent.name,
+      value: { kind: "agent" as const, name: agent.name },
+      description: `→ ${PLACEMENT_LABEL[placementOf(placements, agent.name)]}`,
+      category: "Agents",
+    }),
   )
-  options.push({ title: "✓ Done", value: { kind: "done" }, description: "Save assignment" })
+  options.push({ title: "✓ Done", value: { kind: "done" }, description: "Save placements" })
   return options
 }
 
@@ -121,35 +104,24 @@ export function validateProfileName(
   return { ok: true }
 }
 
-/** Assemble a profile from the two chosen model slots. */
+/** Assemble a profile from the two chosen model slots and its placements. */
 export function buildProfile(
   heavyModel: string,
   restModel: string,
+  placements: Placements,
   heavyVariant?: string,
 ): Profile {
   const heavy: Profile["heavy"] = { model: heavyModel }
   if (heavyVariant && heavyVariant.length > 0) heavy.variant = heavyVariant
-  return { heavy, rest: { model: restModel } }
+  return { heavy, rest: { model: restModel }, placements: { ...placements } }
 }
 
-/**
- * Commit a new (or replacement) profile into the file and make it active. When
- * `assignment`/`exclusions` are provided (first-run wizard) they replace the
- * shared maps; otherwise the existing shared maps are kept.
- */
+/** Commit a new (or replacement) profile into the file, optionally activating it. */
 export function commitProfile(
   file: ProfilesFile,
-  input: {
-    name: string
-    profile: Profile
-    assignment?: Record<string, TierName>
-    exclusions?: string[]
-    setActive?: boolean
-  },
+  input: { name: string; profile: Profile; setActive?: boolean },
 ): ProfilesFile {
   return {
-    assignment: input.assignment ?? file.assignment,
-    exclusions: input.exclusions ?? file.exclusions,
     profiles: { ...file.profiles, [input.name]: input.profile },
     active: input.setActive === false ? file.active : input.name,
   }
@@ -182,12 +154,8 @@ export function deleteProfile(file: ProfilesFile, name: string): ProfilesFile {
   }
 }
 
-/** Replace a profile's model slots in place (used by "edit models…"). */
-export function updateProfileModels(
-  file: ProfilesFile,
-  name: string,
-  profile: Profile,
-): ProfilesFile {
+/** Replace a profile's full definition (models and placements) in place. */
+export function updateProfile(file: ProfilesFile, name: string, profile: Profile): ProfilesFile {
   if (!file.profiles[name]) return file
   return { ...file, profiles: { ...file.profiles, [name]: profile } }
 }
