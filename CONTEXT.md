@@ -5,27 +5,31 @@ Plugin de opencode que define perfiles de modelos y los switchea desde la UI sin
 ## Language
 
 **Perfil**:
-Un set nombrado de modelos (uno por tier) que se aplica a todos los agentes en un solo paso.
+Un set nombrado que define la colocación de cada agente, un modelo por tier y uno para cada agente con asignación específica; se aplica en un solo paso.
 _Avoid_: preset, configuración, modo
 
 **Tier**:
-Una de las dos categorías de capacidad — `heavy` (razonamiento/orquestación) y `rest` (todo lo demás) — a la que se asigna cada agente. Un perfil define qué modelo va en cada tier; `small_model` sigue al tier `rest`.
+Una de las dos categorías de capacidad — `heavy` (razonamiento/orquestación) y `rest` (todo lo demás) — a la que se asigna cada agente. Cada perfil define qué modelo va en cada tier; el `model` global sigue a `heavy` y `small_model` sigue a `rest`.
 _Avoid_: nivel, categoría, rol
 
 **Asignación**:
-El mapeo agente→tier, compartido entre todos los perfiles. Se define una vez en el wizard; los agentes sin asignación caen al tier `rest` con aviso.
+La colocación de un agente en `heavy`, `rest` o `specific` dentro de un perfil. Un mismo agente puede tener asignaciones diferentes entre perfiles; los agentes sin asignación caen al tier `rest` con aviso.
 _Avoid_: mapeo, distribución
 
 **Exclusión**:
-Un agente marcado para que el switch nunca le toque el modelo (ej. uno que necesita un modelo multimodal específico).
+Un agente que un perfil marca para conservar, incluso entre reinicios, su último modelo y variante efectivos aunque hayan sido aplicados por otro perfil. Si el plugin todavía no le aplicó ninguno, conserva el original de opencode. Es una alternativa a las tres colocaciones de la asignación y puede variar entre perfiles.
 _Avoid_: pin, pineo, skip
+
+**Modelo específico**:
+Un modelo, con una variante opcional, que un perfil asigna directamente a un agente con asignación `specific`, sin pasar por un tier. Cada perfil debe definir uno para todos sus agentes `specific`, y puede usar modelos distintos para un mismo agente.
+_Avoid_: modelo fijo, modelo global, exclusión
 
 **Perfil activo**:
 El perfil actualmente aplicado; se persiste en `profiles.json` y el hook `config` lo re-aplica en cada boot.
 _Avoid_: perfil actual, selección
 
 **Wizard**:
-El flujo interactivo dentro de opencode (diálogos TUI) que crea o edita la asignación y los perfiles, validando contra los providers realmente conectados.
+El flujo interactivo dentro de opencode (diálogos TUI) que crea o edita perfiles completos, incluidas sus asignaciones, exclusiones y modelos, validando contra los providers realmente conectados.
 _Avoid_: setup manual, instalador
 
 **Switch en vivo**:
