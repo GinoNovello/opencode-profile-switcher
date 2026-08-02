@@ -1,8 +1,8 @@
 name: release
 
-# On every push to main: typecheck + test, then (if NPM_TOKEN is set) bump the
-# patch version, tag it, push the bump back, and publish to npm. The bump commit
-# carries [skip ci] so it never re-triggers this workflow.
+# Every push to main runs typecheck + tests. Publishing only happens when this
+# workflow is started explicitly with workflow_dispatch; that run bumps the
+# patch version, tags it, pushes the bump, and publishes it to npm.
 #
 # Setup required once: add a repo secret NPM_TOKEN (npm > Access Tokens >
 # Automation token). Without it, this workflow still runs as CI (typecheck +
@@ -11,6 +11,7 @@ name: release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: release
@@ -18,7 +19,7 @@ concurrency:
 
 jobs:
   release:
-    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -46,7 +47,7 @@ jobs:
       - run: bun run build
 
       - name: Bump version, tag, push and publish
-        if: ${{ env.NPM_TOKEN != '' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && env.NPM_TOKEN != '' }}
         env:
           NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
         run: |
