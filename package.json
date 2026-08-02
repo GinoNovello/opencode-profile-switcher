@@ -5,6 +5,9 @@
   "license": "MIT",
   "author": "Gino Novello",
   "type": "module",
+  "engines": {
+    "opencode": ">=1.18.11"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GinoNovello/opencode-profile-switcher.git"
