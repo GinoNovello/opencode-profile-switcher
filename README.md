@@ -9,7 +9,24 @@ Built for people who mix providers (e.g. xAI + GLM) and otherwise have to change
 
 ## Install
 
-Add the package name to the `plugin` array of your `opencode.json` (or
+> **Agents:** fetch and follow the self-contained install guide
+> [`docs/README.opencode.md`](./docs/README.opencode.md)
+> ([raw](https://raw.githubusercontent.com/GinoNovello/opencode-profile-switcher/main/docs/README.opencode.md)).
+> It has everything needed to install and verify this plugin from a single Markdown file.
+
+Requires **opencode >= 1.18.11**. Install the plugin globally with opencode's
+plugin installer:
+
+```sh
+opencode plugin opencode-profile-switcher --global
+```
+
+The installer detects the package's `./server` and `./tui` exports and
+registers the package for both targets. Restart opencode after installation,
+then run `/profile`.
+
+To configure the plugin manually, add it to both global config files. The
+server target is configured in `~/.config/opencode/opencode.json` (or
 `opencode.jsonc`):
 
 ```jsonc
@@ -18,12 +35,18 @@ Add the package name to the `plugin` array of your `opencode.json` (or
 }
 ```
 
-opencode installs it automatically on the next start. Requires **opencode
->= 1.18.11**.
+The TUI target is configured in `~/.config/opencode/tui.json`:
 
-> Loading the plugin by a local file path only activates the config side, not the
-> `/profile` UI — opencode only loads a plugin's TUI entrypoint from a published
-> npm package. Always install by name.
+```json
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": ["opencode-profile-switcher"]
+}
+```
+
+Adding the package only to `opencode.json` loads the config hook but does not
+register the `/profile` command. Installing it with `bun add` alone also does
+not register either entrypoint with opencode.
 
 ## Usage
 
