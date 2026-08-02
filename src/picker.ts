@@ -18,21 +18,33 @@ export function shortModel(model: string): string {
   return slash === -1 ? model : model.slice(slash + 1)
 }
 
-/** Number of agents this profile places as `excluded`. */
-export function excludedCount(profile: Profile): number {
+/** Count agents this profile places under a given placement value. */
+export function placementCount(profile: Profile, placement: Profile["placements"][string]): number {
   let count = 0
-  for (const placement of Object.values(profile.placements)) {
-    if (placement === "excluded") count++
+  for (const value of Object.values(profile.placements)) {
+    if (value === placement) count++
   }
   return count
 }
 
-/** e.g. `heavy: glm-5.2 (max) · rest: glm-4.7 · 2 excluded`. */
+/** Number of agents this profile places as `excluded`. */
+export function excludedCount(profile: Profile): number {
+  return placementCount(profile, "excluded")
+}
+
+/** Number of agents this profile places as `specific`. */
+export function specificCount(profile: Profile): number {
+  return placementCount(profile, "specific")
+}
+
+/** e.g. `heavy: glm-5.2 (max) · rest: glm-4.7 · 1 specific · 2 excluded`. */
 export function describeProfile(profile: Profile): string {
   const heavy = profile.heavy.variant
     ? `${shortModel(profile.heavy.model)} (${profile.heavy.variant})`
     : shortModel(profile.heavy.model)
   const parts = [`heavy: ${heavy}`, `rest: ${shortModel(profile.rest.model)}`]
+  const specific = specificCount(profile)
+  if (specific > 0) parts.push(`${specific} specific`)
   const excluded = excludedCount(profile)
   if (excluded > 0) parts.push(`${excluded} excluded`)
   return parts.join(" · ")

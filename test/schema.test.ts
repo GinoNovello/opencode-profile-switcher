@@ -8,7 +8,13 @@ describe("profilesFileSchema", () => {
         glm: {
           heavy: { model: "zai-coding-plan/glm-5.2", variant: "max" },
           rest: { model: "zai-coding-plan/glm-4.7" },
-          placements: { build: "heavy", explore: "rest", vision: "excluded" },
+          placements: {
+            build: "heavy",
+            explore: "rest",
+            vision: "excluded",
+            docs: "specific",
+          },
+          specifics: { docs: { model: "anthropic/claude-docs", variant: "high" } },
         },
       },
       active: "glm",
@@ -16,6 +22,11 @@ describe("profilesFileSchema", () => {
     const parsed = profilesFileSchema.parse(input)
     expect(parsed.profiles.glm.placements.build).toBe("heavy")
     expect(parsed.profiles.glm.placements.vision).toBe("excluded")
+    expect(parsed.profiles.glm.placements.docs).toBe("specific")
+    expect(parsed.profiles.glm.specifics.docs).toEqual({
+      model: "anthropic/claude-docs",
+      variant: "high",
+    })
     expect(parsed.profiles.glm.heavy.variant).toBe("max")
     expect(parsed.active).toBe("glm")
   })
@@ -26,11 +37,12 @@ describe("profilesFileSchema", () => {
     expect(parsed.active).toBe("x")
   })
 
-  test("defaults placements to an empty map on a profile", () => {
+  test("defaults placements and specifics to empty maps on a profile", () => {
     const parsed = profilesFileSchema.parse({
       profiles: { p: { heavy: { model: "a/b" }, rest: { model: "a/c" } } },
     })
     expect(parsed.profiles.p.placements).toEqual({})
+    expect(parsed.profiles.p.specifics).toEqual({})
   })
 
   test("parses an empty object into empty state", () => {
@@ -42,6 +54,62 @@ describe("profilesFileSchema", () => {
       profiles: { p: { heavy: { model: "a/b" }, rest: { model: "a/c" }, placements: { build: "medium" } } },
     })
     expect(result.success).toBe(false)
+  })
+
+  test("rejects a specific placement without a model slot", () => {
+    const result = profilesFileSchema.safeParse({
+      profiles: {
+        p: {
+          heavy: { model: "a/b" },
+          rest: { model: "a/c" },
+          placements: { docs: "specific" },
+          specifics: {},
+        },
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test("rejects a specific placement with an empty model string", () => {
+    const result = profilesFileSchema.safeParse({
+      profiles: {
+        p: {
+          heavy: { model: "a/b" },
+          rest: { model: "a/c" },
+          placements: { docs: "specific" },
+          specifics: { docs: { model: "" } },
+        },
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test("rejects an orphan specific model without a specific placement", () => {
+    const result = profilesFileSchema.safeParse({
+      profiles: {
+        p: {
+          heavy: { model: "a/b" },
+          rest: { model: "a/c" },
+          placements: { docs: "rest" },
+          specifics: { docs: { model: "a/docs" } },
+        },
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test("accepts a specific slot without a variant", () => {
+    const parsed = profilesFileSchema.parse({
+      profiles: {
+        p: {
+          heavy: { model: "a/b" },
+          rest: { model: "a/c" },
+          placements: { docs: "specific" },
+          specifics: { docs: { model: "a/docs" } },
+        },
+      },
+    })
+    expect(parsed.profiles.p.specifics.docs).toEqual({ model: "a/docs" })
   })
 
   test("rejects a profile missing a tier model", () => {

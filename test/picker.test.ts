@@ -6,6 +6,7 @@ import {
   formatSwitchToast,
   orderedProfileNames,
   shortModel,
+  specificCount,
   switchResultToast,
 } from "../src/picker.js"
 import type { Profile, ProfilesFile } from "../src/schema.js"
@@ -13,12 +14,20 @@ import type { Profile, ProfilesFile } from "../src/schema.js"
 const glm: Profile = {
   heavy: { model: "zai/glm-5", variant: "max" },
   rest: { model: "zai/glm-4" },
-  placements: { build: "heavy", explore: "rest", vision: "excluded", audio: "excluded" },
+  placements: {
+    build: "heavy",
+    explore: "rest",
+    vision: "excluded",
+    audio: "excluded",
+    docs: "specific",
+  },
+  specifics: { docs: { model: "anthropic/claude-docs" } },
 }
 const claude: Profile = {
   heavy: { model: "anthropic/opus" },
   rest: { model: "anthropic/haiku" },
   placements: { build: "heavy" },
+  specifics: {},
 }
 
 function makeFile(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
@@ -39,11 +48,17 @@ describe("shortModel", () => {
 })
 
 describe("describeProfile", () => {
-  test("includes the heavy variant and an excluded count", () => {
-    expect(describeProfile(glm)).toBe("heavy: glm-5 (max) · rest: glm-4 · 2 excluded")
+  test("includes the heavy variant plus specific and excluded counts", () => {
+    expect(describeProfile(glm)).toBe(
+      "heavy: glm-5 (max) · rest: glm-4 · 1 specific · 2 excluded",
+    )
   })
-  test("omits the variant and the excluded suffix when there are none", () => {
+  test("omits the variant and count suffixes when there are none", () => {
     expect(describeProfile(claude)).toBe("heavy: opus · rest: haiku")
+  })
+  test("specificCount matches the placements map", () => {
+    expect(specificCount(glm)).toBe(1)
+    expect(specificCount(claude)).toBe(0)
   })
 })
 
@@ -61,7 +76,9 @@ describe("buildPickerOptions", () => {
     const options = buildPickerOptions(makeFile())
     expect(options).toHaveLength(4)
     expect(options[0]?.title).toBe("● glm")
-    expect(options[0]?.description).toBe("heavy: glm-5 (max) · rest: glm-4 · 2 excluded")
+    expect(options[0]?.description).toBe(
+      "heavy: glm-5 (max) · rest: glm-4 · 1 specific · 2 excluded",
+    )
     expect(options[1]?.title).toBe("  claude")
     expect(options[2]?.value).toEqual({ kind: "new" })
     expect(options[3]?.value).toEqual({ kind: "configure" })
@@ -76,7 +93,7 @@ describe("buildPickerOptions", () => {
 describe("switch toasts", () => {
   test("formatSwitchToast summarizes the applied profile", () => {
     expect(formatSwitchToast("glm", glm)).toBe(
-      'Profile "glm" active — heavy: glm-5 (max) · rest: glm-4 · 2 excluded',
+      'Profile "glm" active — heavy: glm-5 (max) · rest: glm-4 · 1 specific · 2 excluded',
     )
   })
   test("formatAlreadyActiveToast", () => {

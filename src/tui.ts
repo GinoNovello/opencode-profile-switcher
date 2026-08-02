@@ -21,17 +21,22 @@ import { switchProfile, type DisposableClient } from "./switch.js"
 import {
   buildPlacementOptions,
   buildProfile,
+  buildSpecificOptions,
   commitProfile,
   copyPlacements,
+  copySpecifics,
+  cycleAgentPlacement,
   defaultPlacements,
   deleteProfile,
-  nextPlacement,
-  placementOf,
   renameProfile,
-  setPlacement,
+  setSpecific,
+  specificAgentNames,
+  specificsComplete,
+  specificsProgress,
   updateProfile,
   validateProfileName,
   type Placements,
+  type Specifics,
 } from "./wizard.js"
 
 /**
@@ -163,6 +168,47 @@ function promptName(
 }
 
 /**
+ * Pick a single model (+ optional variant). Falls back to a free-text prompt
+ * when no providers are connected. Reused for heavy/rest tiers and for each
+ * `specific` agent slot.
+ */
+function pickOneModel(
+  ctx: Ctx,
+  title: string,
+  onDone: (model: string, variant?: string) => void,
+): void {
+  const list = providers(ctx)
+
+  if (list.length === 0) {
+    showPrompt(ctx, {
+      title: `${title} (provider/model)`,
+      placeholder: "anthropic/claude-...",
+      onConfirm: (raw) => onDone(raw.trim()),
+    })
+    return
+  }
+
+  const modelOptions = buildModelOptions(list)
+  showSelect<string>(ctx, {
+    title,
+    placeholder: "Filter models…",
+    options: modelOptions,
+    onSelect: (model) => {
+      const choice = findModel(list, model)
+      if (choice && choice.variants.length > 0) {
+        showSelect<string>(ctx, {
+          title: `Variant — ${choice.modelName}`,
+          options: buildVariantOptions(choice.variants),
+          onSelect: (variant) => onDone(model, variant === NO_VARIANT ? undefined : variant),
+        })
+      } else {
+        onDone(model)
+      }
+    },
+  })
+}
+
+/**
  * Pick heavy model (+ optional variant) then rest model. Falls back to free-text
  * prompts when no providers are connected (documented limitation: we cannot
  * enumerate models without a connected provider list).
@@ -217,36 +263,89 @@ function pickModels(
 }
 
 /**
- * The per-profile placement editor: cycle each agent heavy → rest → excluded,
- * then "Done". Loops by re-rendering the dialog after each change. When agents
- * cannot be enumerated it keeps the initial placements so the flow never blocks.
+ * The per-profile placement editor: cycle each agent
+ * heavy → rest → specific → excluded, then "Done". Loops by re-rendering the
+ * dialog after each change. Tracks specifics so leaving `specific` drops the
+ * slot. When agents cannot be enumerated it keeps the initial state so the
+ * flow never blocks.
  */
 async function editPlacements(
   ctx: Ctx,
-  initial: Placements,
-  onDone: (placements: Placements) => void,
+  initialPlacements: Placements,
+  initialSpecifics: Specifics,
+  onDone: (placements: Placements, specifics: Specifics) => void,
 ): Promise<void> {
   const agents = await enumerateAgents(ctx.api.client as unknown as AgentListerClient)
 
   if (agents.length === 0) {
     toast(ctx, "warning", "Could not enumerate agents — keeping the current placements.")
+    onDone(initialPlacements, initialSpecifics)
+    return
+  }
+
+  let placements: Placements = { ...initialPlacements }
+  let specifics: Specifics = { ...initialSpecifics }
+
+  const render = () => {
+    showSelect(ctx, {
+      title: "Placements — select an agent to cycle heavy → rest → specific → excluded",
+      options: buildPlacementOptions(placements, agents),
+      onSelect: (value) => {
+        if (value.kind === "done") {
+          onDone(placements, specifics)
+          return
+        }
+        const next = cycleAgentPlacement(placements, specifics, value.name)
+        placements = next.placements
+        specifics = next.specifics
+        render()
+      },
+    })
+  }
+  render()
+}
+
+/**
+ * Configure direct models for every agent placed as `specific`. Agents can be
+ * filled in any order; "Done" is blocked until all have a non-empty model.
+ * Skips entirely when there are no specific agents.
+ */
+function configureSpecifics(
+  ctx: Ctx,
+  placements: Placements,
+  initial: Specifics,
+  onDone: (specifics: Specifics) => void,
+): void {
+  if (specificAgentNames(placements).length === 0) {
     onDone(initial)
     return
   }
 
-  let working: Placements = { ...initial }
+  let specifics: Specifics = { ...initial }
 
   const render = () => {
+    const progress = specificsProgress(placements, specifics)
     showSelect(ctx, {
-      title: "Placements — select an agent to cycle heavy → rest → excluded",
-      options: buildPlacementOptions(working, agents),
+      title: `Specific models — ${progress.done}/${progress.total} set (any order)`,
+      options: buildSpecificOptions(placements, specifics),
       onSelect: (value) => {
         if (value.kind === "done") {
-          onDone(working)
+          if (!specificsComplete(placements, specifics)) {
+            toast(
+              ctx,
+              "error",
+              `Set a model for: ${progress.missing.join(", ")}`,
+            )
+            render()
+            return
+          }
+          onDone(specifics)
           return
         }
-        working = setPlacement(working, value.name, nextPlacement(placementOf(working, value.name)))
-        render()
+        pickOneModel(ctx, `Model for ${value.name}`, (model, variant) => {
+          specifics = setSpecific(specifics, value.name, model, variant)
+          render()
+        })
       },
     })
   }
@@ -273,22 +372,24 @@ async function runFirstRunWizard(ctx: Ctx): Promise<void> {
   const agents = await enumerateAgents(ctx.api.client as unknown as AgentListerClient)
   const initial = defaultPlacements(agents)
 
-  const toDetails = (placements: Placements) => {
+  const toDetails = (placements: Placements, specifics: Specifics) => {
     promptName(ctx, [], undefined, (name) => {
       pickModels(ctx, (heavy, rest, variant) => {
-        const base = readProfiles(ctx.path).profiles
-        const next = commitProfile(base, {
-          name,
-          profile: buildProfile(heavy, rest, placements, variant),
-          setActive: true,
+        configureSpecifics(ctx, placements, specifics, (finalSpecifics) => {
+          const base = readProfiles(ctx.path).profiles
+          const next = commitProfile(base, {
+            name,
+            profile: buildProfile(heavy, rest, placements, variant, finalSpecifics),
+            setActive: true,
+          })
+          void persistAndSwitch(ctx, next, name)
         })
-        void persistAndSwitch(ctx, next, name)
       })
     })
   }
 
   if (agents.length === 0) {
-    toDetails(initial)
+    toDetails(initial, {})
     return
   }
 
@@ -297,28 +398,33 @@ async function runFirstRunWizard(ctx: Ctx): Promise<void> {
   showConfirm(ctx, {
     title: "Set up profiles",
     message: `Default placements: ${heavyCount} primary agent(s) → heavy, ${restCount} other(s) → rest. Customize it?`,
-    onConfirm: () => void editPlacements(ctx, initial, toDetails),
-    onCancel: () => toDetails(initial),
+    onConfirm: () => void editPlacements(ctx, initial, {}, toDetails),
+    onCancel: () => toDetails(initial, {}),
   })
 }
 
 /**
- * New-profile wizard: copy the active profile's placements (decision #20),
- * review them, then require fresh heavy/rest models (decision #21).
+ * New-profile wizard: copy the active profile's placements (including
+ * `specific` designations) but start with empty specific models so the user
+ * must choose fresh direct models. Heavy/rest models are also chosen fresh.
  */
 function runNewProfileWizard(ctx: Ctx, file: ProfilesFile): void {
   const activeProfile = file.profiles[file.active]
-  const seed: Placements = activeProfile ? copyPlacements(activeProfile) : {}
+  const seedPlacements: Placements = activeProfile ? copyPlacements(activeProfile) : {}
+  // Intentionally empty: designations copy, models do not.
+  const seedSpecifics: Specifics = {}
 
   promptName(ctx, Object.keys(file.profiles), undefined, (name) => {
-    void editPlacements(ctx, seed, (placements) => {
+    void editPlacements(ctx, seedPlacements, seedSpecifics, (placements, specifics) => {
       pickModels(ctx, (heavy, rest, variant) => {
-        const next = commitProfile(file, {
-          name,
-          profile: buildProfile(heavy, rest, placements, variant),
-          setActive: true,
+        configureSpecifics(ctx, placements, specifics, (finalSpecifics) => {
+          const next = commitProfile(file, {
+            name,
+            profile: buildProfile(heavy, rest, placements, variant, finalSpecifics),
+            setActive: true,
+          })
+          void persistAndSwitch(ctx, next, name)
         })
-        void persistAndSwitch(ctx, next, name)
       })
     })
   })
@@ -364,10 +470,17 @@ function openConfigureMenu(ctx: Ctx, file: ProfilesFile): void {
           pickProfile(ctx, file, "Edit which profile?", (name) => {
             const profile = file.profiles[name]
             if (!profile) return
-            void editPlacements(ctx, copyPlacements(profile), (placements) => {
+            // Edit preserves existing specific models.
+            void editPlacements(ctx, copyPlacements(profile), copySpecifics(profile), (placements, specifics) => {
               pickModels(ctx, (heavy, rest, variant) => {
-                const next = updateProfile(file, name, buildProfile(heavy, rest, placements, variant))
-                void saveConfigEdit(ctx, next, name === file.active)
+                configureSpecifics(ctx, placements, specifics, (finalSpecifics) => {
+                  const next = updateProfile(
+                    file,
+                    name,
+                    buildProfile(heavy, rest, placements, variant, finalSpecifics),
+                  )
+                  void saveConfigEdit(ctx, next, name === file.active)
+                })
               })
             })
           })
