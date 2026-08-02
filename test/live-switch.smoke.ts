@@ -58,17 +58,18 @@ test("switches the shipped server plugin live without restarting opencode", asyn
     })}\n`,
   )
 
+  const placements = { build: "heavy", plan: "heavy", explore: "rest" } as const
   const profiles: ProfilesFile = {
-    assignment: { build: "heavy", plan: "heavy", explore: "rest" },
-    exclusions: [],
     profiles: {
       alpha: {
         heavy: { model: "alpha-provider/alpha-heavy" },
         rest: { model: "alpha-provider/alpha-rest" },
+        placements: { ...placements },
       },
       beta: {
         heavy: { model: "beta-provider/beta-heavy" },
         rest: { model: "beta-provider/beta-rest" },
+        placements: { ...placements },
       },
     },
     active: "alpha",

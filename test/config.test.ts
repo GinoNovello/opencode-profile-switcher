@@ -9,11 +9,17 @@ let dir: string
 let path: string
 
 const sample: ProfilesFile = {
-  assignment: { build: "heavy", explore: "rest" },
-  exclusions: ["vision"],
   profiles: {
-    glm: { heavy: { model: "zai/glm-5", variant: "max" }, rest: { model: "zai/glm-4" } },
-    grok: { heavy: { model: "xai/grok-heavy" }, rest: { model: "xai/grok-mini" } },
+    glm: {
+      heavy: { model: "zai/glm-5", variant: "max" },
+      rest: { model: "zai/glm-4" },
+      placements: { build: "heavy", explore: "rest", vision: "excluded" },
+    },
+    grok: {
+      heavy: { model: "xai/grok-heavy" },
+      rest: { model: "xai/grok-mini" },
+      placements: { build: "heavy" },
+    },
   },
   active: "glm",
 }
@@ -31,7 +37,7 @@ describe("readProfiles", () => {
   test("missing file returns empty state with signal", () => {
     const result = readProfiles(path)
     expect(result.status).toBe("missing")
-    expect(result.profiles).toEqual({ assignment: {}, exclusions: [], profiles: {}, active: "" })
+    expect(result.profiles).toEqual({ profiles: {}, active: "" })
     expect(result.error).toBeDefined()
   })
 
@@ -45,7 +51,7 @@ describe("readProfiles", () => {
 
   test("schema-invalid content returns invalid", () => {
     const p = join(dir, "bad.json")
-    writeFileSync(p, JSON.stringify({ assignment: { build: "medium" } }), "utf8")
+    writeFileSync(p, JSON.stringify({ profiles: { glm: { heavy: {}, rest: { model: "a/b" } } } }), "utf8")
     const result = readProfiles(p)
     expect(result.status).toBe("invalid")
     expect(result.error).toContain("schema validation failed")

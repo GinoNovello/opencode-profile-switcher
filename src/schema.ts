@@ -9,6 +9,15 @@ export const TIERS = ["heavy", "rest"] as const
 export type TierName = (typeof TIERS)[number]
 
 /**
+ * A per-agent placement within a profile: a capability tier or `excluded` (the
+ * switch never touches that agent's model). Placements belong to each profile —
+ * the same agent can be `heavy` in one profile, `rest` in another and
+ * `excluded` in a third. See CONTEXT.md ("asignación", "exclusión").
+ */
+export const PLACEMENTS = [...TIERS, "excluded"] as const
+export type Placement = (typeof PLACEMENTS)[number]
+
+/**
  * A model slot for the `heavy` tier. `variant` is an optional model variant
  * (e.g. a reasoning-effort flavour) applied per agent.
  */
@@ -23,27 +32,25 @@ export const restTierSchema = z.object({
 })
 
 /**
- * A single profile: one model per tier. Creating a profile costs two choices,
- * not one per agent — the agent-to-tier assignment is shared across profiles.
+ * A single profile: one model per tier plus its own agent placements. A profile
+ * owns which agents are `heavy`, `rest` or `excluded`, so activating it fully
+ * describes how every agent is modelled — no shared, global assignment.
  */
 export const profileSchema = z.object({
   heavy: heavyTierSchema,
   rest: restTierSchema,
+  placements: z.record(z.string(), z.enum(PLACEMENTS)).default({}),
 })
 
 /**
- * The full on-disk shape of `~/.config/opencode/profiles.json` (decision #13):
- * - `assignment`: shared agent -> tier map.
- * - `exclusions`: agents the switch must never touch.
- * - `profiles`: named profiles, each `{ heavy, rest }`.
+ * The full on-disk shape of `~/.config/opencode/profiles.json`:
+ * - `profiles`: named profiles, each `{ heavy, rest, placements }`.
  * - `active`: the currently applied profile name.
  *
  * Every field has a default so a partial/hand-edited file still parses into a
  * complete, well-formed value.
  */
 export const profilesFileSchema = z.object({
-  assignment: z.record(z.string(), z.enum(TIERS)).default({}),
-  exclusions: z.array(z.string()).default([]),
   profiles: z.record(z.string(), profileSchema).default({}),
   active: z.string().default(""),
 })
@@ -55,5 +62,5 @@ export type ProfilesFile = z.infer<typeof profilesFileSchema>
 
 /** An empty, valid profiles file — the fallback for a missing/corrupt file. */
 export function emptyProfilesFile(): ProfilesFile {
-  return { assignment: {}, exclusions: [], profiles: {}, active: "" }
+  return { profiles: {}, active: "" }
 }

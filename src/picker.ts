@@ -18,12 +18,24 @@ export function shortModel(model: string): string {
   return slash === -1 ? model : model.slice(slash + 1)
 }
 
-/** e.g. `heavy: glm-5.2 (max) · rest: glm-4.7`. */
+/** Number of agents this profile places as `excluded`. */
+export function excludedCount(profile: Profile): number {
+  let count = 0
+  for (const placement of Object.values(profile.placements)) {
+    if (placement === "excluded") count++
+  }
+  return count
+}
+
+/** e.g. `heavy: glm-5.2 (max) · rest: glm-4.7 · 2 excluded`. */
 export function describeProfile(profile: Profile): string {
   const heavy = profile.heavy.variant
     ? `${shortModel(profile.heavy.model)} (${profile.heavy.variant})`
     : shortModel(profile.heavy.model)
-  return `heavy: ${heavy} · rest: ${shortModel(profile.rest.model)}`
+  const parts = [`heavy: ${heavy}`, `rest: ${shortModel(profile.rest.model)}`]
+  const excluded = excludedCount(profile)
+  if (excluded > 0) parts.push(`${excluded} excluded`)
+  return parts.join(" · ")
 }
 
 /** Profile names in stable, display order (active first, then alphabetical). */
@@ -60,7 +72,7 @@ export function buildPickerOptions(profiles: ProfilesFile): SelectOption<PickerA
   options.push({
     title: "⚙ Configure…",
     value: { kind: "configure" },
-    description: "Edit, rename or delete profiles; adjust assignment",
+    description: "Edit, rename or delete profiles",
   })
 
   return options

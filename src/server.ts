@@ -25,7 +25,8 @@ async function log(client: OpencodeClient, level: LogLevel, message: string): Pr
  * effect without restarting the process.
  *
  * Note: the `config` hook runs before opencode's built-in agents are
- * enumerable, so agents are derived from the assignment + existing config here.
+ * enumerable, so agents are derived from the active profile's placements +
+ * existing config here.
  * Runtime enumeration (`enumerateAgentNames`) is exported for callers that run
  * after boot (e.g. the TUI switch flow in #18).
  */

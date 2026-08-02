@@ -10,11 +10,9 @@ let dir: string
 let path: string
 
 const sample: ProfilesFile = {
-  assignment: { build: "heavy" },
-  exclusions: [],
   profiles: {
-    glm: { heavy: { model: "zai/glm-5" }, rest: { model: "zai/glm-4" } },
-    grok: { heavy: { model: "xai/grok-heavy" }, rest: { model: "xai/grok-mini" } },
+    glm: { heavy: { model: "zai/glm-5" }, rest: { model: "zai/glm-4" }, placements: { build: "heavy" } },
+    grok: { heavy: { model: "xai/grok-heavy" }, rest: { model: "xai/grok-mini" }, placements: {} },
   },
   active: "glm",
 }
