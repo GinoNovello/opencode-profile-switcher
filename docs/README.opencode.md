@@ -86,6 +86,11 @@ A switch applies models to `model`, `small_model`, and every assigned agent,
 then reloads in place — sessions survive; no restart needed for the switch
 itself.
 
+**TUI caveat:** a model chosen manually in opencode's model picker is kept in
+TUI memory per agent and has priority over the profile after an in-place
+re-bootstrap. If a manual choice is masking the active profile, restart the TUI
+to clear it.
+
 ## How it works (short)
 
 **Tiers:** `heavy` (reasoning/orchestration + global `model`) and `rest`
@@ -138,6 +143,7 @@ Restart opencode after updating. Keep both config entries pointing at
 | Models not applied on start | List plugin in `opencode.json`; check `active` in `profiles.json` |
 | Wizard has no models | `/connect` a provider |
 | Switch saved but not live | Restart opencode (live reload may have failed) |
+| Active profile is not the displayed model | Restart the TUI to clear a manual model choice |
 | Unknown model / provider | Switch still applies and warns; `/connect` |
 | Corrupt `profiles.json` | `/profile` offers wizard (overwrites file) |
 

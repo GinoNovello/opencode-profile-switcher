@@ -40,6 +40,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:smoke": "bun run build && bun test ./test/live-switch.smoke.ts",
     "prepublishOnly": "bun run build"
   },
   "peerDependencies": {

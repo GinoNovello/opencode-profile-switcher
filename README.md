@@ -63,6 +63,12 @@ Switching a profile applies its models to `model`, `small_model` and every agent
 then reloads the running instance in place — your open sessions survive and no
 manual restart is needed.
 
+> **TUI model overrides:** if you manually select a model in opencode's model
+> picker, that per-agent choice stays in TUI memory and takes priority over the
+> profile after an in-place re-bootstrap. Restart the TUI to clear the manual
+> choice and use the active profile again. Switching works normally when no
+> manual model choice is active.
+
 ## How a profile works
 
 A **profile** is one model per **tier**. There are two tiers:
@@ -115,6 +121,24 @@ but you can also edit it by hand:
 If a profile references a model whose provider isn't connected, the switch still
 applies and warns you (`/connect` to add the provider). A corrupt `profiles.json`
 never breaks startup — `/profile` offers to run the wizard.
+
+## Development
+
+```sh
+bun run typecheck
+bun test
+bun run test:smoke
+```
+
+The smoke test requires `opencode` on `PATH`. It builds and loads the shipped
+server entrypoint in an isolated XDG sandbox, switches between fake profiles,
+and verifies `GET /config`, `GET /agent`, process identity and session survival.
+It never uses your real opencode config, credentials or providers.
+
+The TUI override caveat was source-verified against opencode 1.18.11: its local
+model store gives a manual per-agent choice priority over refreshed agent/config
+models, and the instance-disposed bootstrap refresh does not clear that local
+store. It cannot be reproduced by the headless smoke test.
 
 ## Out of scope
 
