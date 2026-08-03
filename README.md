@@ -58,8 +58,9 @@ Run **`/profile`** in opencode:
   (from your connected providers).
 - **After that** → `/profile` opens a fuzzy picker: pick a profile to switch to
   it live, or use **＋ New profile** / **⚙ Configure…** to manage them. Creating a
-  new profile copies the active profile's placements (so you don't re-classify
-  every agent) but asks for fresh `heavy`/`rest` models.
+  new profile copies the active profile's placements (including `specific`
+  designations) but asks for fresh `heavy`/`rest` models and fresh direct models
+  for every `specific` agent.
 
 Switching a profile applies its models to `model`, `small_model` and every agent,
 then reloads the running instance in place — your open sessions survive and no
@@ -73,17 +74,23 @@ manual restart is needed.
 
 ## How a profile works
 
-A **profile** owns one model per **tier** plus its own agent **placements**.
-There are two tiers:
+A **profile** owns one model per **tier**, its own agent **placements**, and a
+direct model for every agent placed as **`specific`**. There are two tiers:
 
 - **`heavy`** — reasoning / orchestration agents (and the global `model`).
 - **`rest`** — everything else (and the global `small_model`).
 
-Each profile places every agent in `heavy`, `rest`, or **`excluded`** (the switch
-never touches that agent's model — e.g. a vision agent that needs a specific
-multimodal model). Placements belong to the profile, so the same agent can be
-`heavy` in one profile, `rest` in another and `excluded` in a third. An agent
-absent from the active profile's placements falls back to `rest` and is reported.
+Each profile places every agent in `heavy`, `rest`, **`specific`**, or
+**`excluded`**:
+
+- **`specific`** — the agent gets a direct model (and optional variant) from the
+  profile's `specifics` map, without going through a tier.
+- **`excluded`** — the switch never touches that agent's model (e.g. a vision
+  agent that needs a multimodal model outside the profile).
+
+Placements belong to the profile, so the same agent can be `heavy` in one
+profile, `specific` in another and `excluded` in a third. An agent absent from
+the active profile's placements falls back to `rest` and is reported.
 
 ## Configuration
 
@@ -96,12 +103,20 @@ but you can also edit it by hand:
     "xai": {
       "heavy": { "model": "xai/grok-4.5", "variant": "high" },
       "rest": { "model": "xai/grok-4.20-0309-non-reasoning" },
-      "placements": { "build": "heavy", "plan": "heavy", "explore": "rest", "vision": "excluded" }
+      "placements": {
+        "build": "heavy",
+        "plan": "heavy",
+        "explore": "rest",
+        "docs": "specific",
+        "vision": "excluded"
+      },
+      "specifics": { "docs": { "model": "anthropic/claude-sonnet-4", "variant": "high" } }
     },
     "glm": {
       "heavy": { "model": "zai-coding-plan/glm-5.2", "variant": "max" },
       "rest": { "model": "zai-coding-plan/glm-4.7" },
-      "placements": { "build": "heavy", "explore": "rest", "vision": "excluded" }
+      "placements": { "build": "heavy", "explore": "rest", "vision": "excluded" },
+      "specifics": {}
     }
   },
   "active": "xai"
@@ -109,11 +124,14 @@ but you can also edit it by hand:
 ```
 
 - `profiles` — named profiles, each
-  `{ heavy: { model, variant? }, rest: { model }, placements }`. `variant` is an
-  optional per-model variant (e.g. a reasoning-effort flavour) and applies to the
-  `heavy` slot.
-- `placements` — this profile's agent → placement (`heavy` | `rest` | `excluded`)
-  map. Owned by the profile, so it can differ between profiles.
+  `{ heavy: { model, variant? }, rest: { model }, placements, specifics }`.
+  `variant` is an optional per-model variant (e.g. a reasoning-effort flavour).
+- `placements` — this profile's agent → placement
+  (`heavy` | `rest` | `specific` | `excluded`) map. Owned by the profile, so it
+  can differ between profiles.
+- `specifics` — direct `{ model, variant? }` slots for every agent placed as
+  `specific`. Every `specific` placement must have a non-empty model; orphan
+  slots (without a matching placement) are invalid.
 - `active` — the currently applied profile. The plugin re-applies it on every
   start.
 

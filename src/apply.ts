@@ -54,12 +54,19 @@ function tierSlot(profile: Profile, tier: TierName): { model: string; variant?: 
   return tier === "heavy" ? profile.heavy : profile.rest
 }
 
+/** Write a model (and optional variant) onto an agent config entry. */
+function applySlot(
+  target: MutableAgentConfig,
+  slot: { model: string; variant?: string },
+): void {
+  target.model = slot.model
+  if (slot.variant) target.variant = slot.variant
+  else delete target.variant
+}
+
 /** Write a tier's model (and variant, heavy-only) onto an agent config entry. */
 function applyTier(target: MutableAgentConfig, profile: Profile, tier: TierName): void {
-  const slot = tierSlot(profile, tier)
-  target.model = slot.model
-  if ("variant" in slot && slot.variant) target.variant = slot.variant
-  else delete target.variant
+  applySlot(target, tierSlot(profile, tier))
 }
 
 /**
@@ -68,6 +75,9 @@ function applyTier(target: MutableAgentConfig, profile: Profile, tier: TierName)
  * Rules:
  * - `cfg.model` = heavy tier model; `cfg.small_model` = rest tier model.
  * - Each considered agent gets the model of its placement in the active profile.
+ * - Agents placed as `specific` receive their direct model/variant from
+ *   `profile.specifics` (no tier indirection). A missing/empty slot is skipped
+ *   defensively so a hand-edited incomplete file cannot crash the switch.
  * - Agents the profile places as `excluded` are left completely untouched.
  * - An agent absent from the profile's placements falls back to the `rest` tier
  *   and is reported in `unassigned` (never breaks the switch).
@@ -104,10 +114,21 @@ export function applyProfile(
 
   const changedAgents: string[] = []
   const unassigned: string[] = []
+  const specifics = profile.specifics ?? {}
 
   for (const name of names) {
     const placement = profile.placements[name]
     if (placement === "excluded") continue
+
+    if (placement === "specific") {
+      const slot = specifics[name]
+      // Defensive: incomplete hand-edited JSON must not throw or half-write.
+      if (!slot?.model) continue
+      const target = (agentConfig[name] ??= {})
+      applySlot(target, slot)
+      changedAgents.push(name)
+      continue
+    }
 
     const tier: TierName = placement ?? "rest"
     if (!placement) unassigned.push(name)

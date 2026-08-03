@@ -13,12 +13,14 @@ const sample: ProfilesFile = {
     glm: {
       heavy: { model: "zai/glm-5", variant: "max" },
       rest: { model: "zai/glm-4" },
-      placements: { build: "heavy", explore: "rest", vision: "excluded" },
+      placements: { build: "heavy", explore: "rest", vision: "excluded", docs: "specific" },
+      specifics: { docs: { model: "anthropic/claude-docs", variant: "high" } },
     },
     grok: {
       heavy: { model: "xai/grok-heavy" },
       rest: { model: "xai/grok-mini" },
       placements: { build: "heavy" },
+      specifics: {},
     },
   },
   active: "glm",

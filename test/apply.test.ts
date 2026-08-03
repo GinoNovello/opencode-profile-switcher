@@ -8,7 +8,14 @@ function makeProfiles(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
       glm: {
         heavy: { model: "zai/glm-5", variant: "max" },
         rest: { model: "zai/glm-4" },
-        placements: { build: "heavy", plan: "heavy", explore: "rest", vision: "excluded" },
+        placements: {
+          build: "heavy",
+          plan: "heavy",
+          explore: "rest",
+          vision: "excluded",
+          docs: "specific",
+        },
+        specifics: { docs: { model: "anthropic/claude-docs", variant: "high" } },
       },
     },
     active: "glm",
@@ -38,6 +45,29 @@ describe("applyProfile", () => {
     expect(cfg.agent?.explore?.variant).toBeUndefined()
   })
 
+  test("specific agent gets its direct model and variant without using a tier", () => {
+    const cfg: MutableConfig = {}
+    applyProfile(cfg, makeProfiles())
+    expect(cfg.agent?.docs).toEqual({ model: "anthropic/claude-docs", variant: "high" })
+  })
+
+  test("specific agent without a variant clears a stale variant", () => {
+    const profiles = makeProfiles({
+      profiles: {
+        glm: {
+          heavy: { model: "zai/glm-5" },
+          rest: { model: "zai/glm-4" },
+          placements: { docs: "specific" },
+          specifics: { docs: { model: "anthropic/claude-docs" } },
+        },
+      },
+    })
+    const cfg: MutableConfig = { agent: { docs: { model: "old", variant: "reasoning" } } }
+    applyProfile(cfg, profiles)
+    expect(cfg.agent?.docs).toEqual({ model: "anthropic/claude-docs" })
+    expect(cfg.agent?.docs?.variant).toBeUndefined()
+  })
+
   test("clears a stale variant when tier has none", () => {
     const cfg: MutableConfig = { agent: { explore: { model: "old", variant: "reasoning" } } }
     applyProfile(cfg, makeProfiles())
@@ -59,11 +89,13 @@ describe("applyProfile", () => {
           heavy: { model: "zai/glm-5" },
           rest: { model: "zai/glm-4" },
           placements: { build: "heavy" },
+          specifics: {},
         },
         grok: {
           heavy: { model: "xai/grok-heavy" },
           rest: { model: "xai/grok-mini" },
           placements: { build: "rest" },
+          specifics: {},
         },
       },
       active: "grok",
@@ -83,11 +115,35 @@ describe("applyProfile", () => {
   test("enumerated agents are all considered", () => {
     const cfg: MutableConfig = {}
     const result = applyProfile(cfg, makeProfiles(), {
-      agents: ["build", "explore", "vision", "newbie"],
+      agents: ["build", "explore", "vision", "newbie", "docs"],
     })
-    // vision excluded, others applied
-    expect(result.changedAgents.sort()).toEqual(["build", "explore", "newbie", "plan"])
+    // vision excluded, others applied (including specific docs)
+    expect(result.changedAgents.sort()).toEqual(["build", "docs", "explore", "newbie", "plan"])
     expect(cfg.agent?.newbie).toEqual({ model: "zai/glm-4" })
+    expect(cfg.agent?.docs).toEqual({ model: "anthropic/claude-docs", variant: "high" })
+  })
+
+  test("incomplete specific slot is skipped defensively without breaking the switch", () => {
+    const profiles = {
+      profiles: {
+        glm: {
+          heavy: { model: "zai/glm-5" },
+          rest: { model: "zai/glm-4" },
+          placements: { build: "heavy", docs: "specific" as const },
+          // Bypass schema: missing slot for a specific agent.
+          specifics: {},
+        },
+      },
+      active: "glm",
+    } as ProfilesFile
+    const cfg: MutableConfig = { agent: { docs: { model: "keep-me", variant: "old" } } }
+    const result = applyProfile(cfg, profiles)
+    expect(result.applied).toBe(true)
+    expect(cfg.model).toBe("zai/glm-5")
+    expect(cfg.agent?.build).toEqual({ model: "zai/glm-5" })
+    // Incomplete specific must not partially overwrite the agent.
+    expect(cfg.agent?.docs).toEqual({ model: "keep-me", variant: "old" })
+    expect(result.changedAgents).not.toContain("docs")
   })
 
   test("no active profile -> not applied, nothing mutated", () => {
@@ -114,6 +170,7 @@ describe("applyProfile", () => {
           heavy: { model: "xai/grok-heavy" },
           rest: { model: "xai/grok-mini" },
           placements: { build: "heavy" },
+          specifics: {},
         },
       },
     })

@@ -58,18 +58,25 @@ test("switches the shipped server plugin live without restarting opencode", asyn
     })}\n`,
   )
 
-  const placements = { build: "heavy", plan: "heavy", explore: "rest" } as const
+  const placements = {
+    build: "heavy",
+    plan: "heavy",
+    explore: "rest",
+    docs: "specific",
+  } as const
   const profiles: ProfilesFile = {
     profiles: {
       alpha: {
         heavy: { model: "alpha-provider/alpha-heavy" },
         rest: { model: "alpha-provider/alpha-rest" },
         placements: { ...placements },
+        specifics: { docs: { model: "alpha-provider/alpha-docs", variant: "fast" } },
       },
       beta: {
         heavy: { model: "beta-provider/beta-heavy" },
         rest: { model: "beta-provider/beta-rest" },
         placements: { ...placements },
+        specifics: { docs: { model: "beta-provider/beta-docs", variant: "max" } },
       },
     },
     active: "alpha",
@@ -105,10 +112,19 @@ test("switches the shipped server plugin live without restarting opencode", asyn
   let failure: unknown
   try {
     const initialConfig = await waitFor(
-      () => getJson<{ model?: string; small_model?: string }>("/config"),
+      () =>
+        getJson<{
+          model?: string
+          small_model?: string
+          agent?: Record<string, { model?: string; variant?: string }>
+        }>("/config"),
       (config) => config.model === "alpha-provider/alpha-heavy",
     )
     expect(initialConfig.small_model).toBe("alpha-provider/alpha-rest")
+    expect(initialConfig.agent?.docs).toEqual({
+      model: "alpha-provider/alpha-docs",
+      variant: "fast",
+    })
 
     const initialAgents = await getJson<AgentResponse[]>("/agent")
     expect(initialAgents.find((agent) => agent.name === "build")?.model).toEqual({
@@ -151,6 +167,14 @@ test("switches the shipped server plugin live without restarting opencode", asyn
     expect(activeAgents.find((agent) => agent.name === "explore")?.model).toEqual({
       providerID: "beta-provider",
       modelID: "beta-rest",
+    })
+
+    const activeFull = await getJson<{
+      agent?: Record<string, { model?: string; variant?: string }>
+    }>("/config")
+    expect(activeFull.agent?.docs).toEqual({
+      model: "beta-provider/beta-docs",
+      variant: "max",
     })
 
     const sessions = await getJson<Array<{ id: string }>>("/session")

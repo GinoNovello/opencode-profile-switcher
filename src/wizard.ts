@@ -1,16 +1,19 @@
 import type { AgentInfo } from "./agents.js"
-import type { Placement, Profile, ProfilesFile } from "./schema.js"
+import type { Placement, Profile, ProfilesFile, SpecificSlot } from "./schema.js"
 import type { SelectOption } from "./select.js"
 
-export type { Placement } from "./schema.js"
+export type { Placement, SpecificSlot } from "./schema.js"
 
 /** A profile's agent → placement map. */
 export type Placements = Record<string, Placement>
 
+/** A profile's agent → direct model slot map for `specific` placements. */
+export type Specifics = Record<string, SpecificSlot>
+
 /**
  * Default placement for one enumerated agent: primary agents go to `heavy`;
- * subagents and hidden agents go to `rest`. Nothing is excluded by default.
- * `mode: "all"` is primary-capable, so it is treated as `heavy`.
+ * subagents and hidden agents go to `rest`. Nothing is excluded or specific by
+ * default. `mode: "all"` is primary-capable, so it is treated as `heavy`.
  */
 export function defaultPlacement(agent: AgentInfo): Placement {
   if (agent.hidden) return "rest"
@@ -28,9 +31,22 @@ export function defaultPlacements(agents: readonly AgentInfo[]): Placements {
   return placements
 }
 
-/** Copy a profile's placements (including exclusions) into a detached map. */
+/** Copy a profile's placements (including exclusions and specific designations). */
 export function copyPlacements(profile: Profile): Placements {
   return { ...profile.placements }
+}
+
+/**
+ * Copy a profile's specific model slots. Used when editing an existing profile
+ * so its direct models are preserved. New-profile flows intentionally skip this
+ * and start with an empty map (designations copy, models do not).
+ */
+export function copySpecifics(profile: Profile): Specifics {
+  const specifics: Specifics = {}
+  for (const [name, slot] of Object.entries(profile.specifics)) {
+    specifics[name] = { ...slot }
+  }
+  return specifics
 }
 
 /** Resolve an agent's placement, defaulting an absent agent to the `rest` tier. */
@@ -38,12 +54,14 @@ export function placementOf(placements: Placements, name: string): Placement {
   return placements[name] ?? "rest"
 }
 
-/** Cycle a placement heavy → rest → excluded → heavy for the placement editor. */
+/** Cycle a placement heavy → rest → specific → excluded → heavy. */
 export function nextPlacement(current: Placement): Placement {
   switch (current) {
     case "heavy":
       return "rest"
     case "rest":
+      return "specific"
+    case "specific":
       return "excluded"
     default:
       return "heavy"
@@ -55,9 +73,77 @@ export function setPlacement(placements: Placements, name: string, placement: Pl
   return { ...placements, [name]: placement }
 }
 
+/**
+ * Cycle one agent's placement and drop its specific slot when leaving
+ * `specific`. Returning to `specific` starts without a model (must be chosen
+ * again). Inputs are not mutated.
+ */
+export function cycleAgentPlacement(
+  placements: Placements,
+  specifics: Specifics,
+  name: string,
+): { placements: Placements; specifics: Specifics } {
+  const current = placementOf(placements, name)
+  const next = nextPlacement(current)
+  const nextPlacements = setPlacement(placements, name, next)
+  if (current !== "specific" || next === "specific") {
+    return { placements: nextPlacements, specifics }
+  }
+  const nextSpecifics = { ...specifics }
+  delete nextSpecifics[name]
+  return { placements: nextPlacements, specifics: nextSpecifics }
+}
+
+/** Agent names currently placed as `specific`, in stable alphabetical order. */
+export function specificAgentNames(placements: Placements): string[] {
+  return Object.entries(placements)
+    .filter(([, placement]) => placement === "specific")
+    .map(([name]) => name)
+    .sort((a, b) => a.localeCompare(b))
+}
+
+/** Specific agents that still need a non-empty direct model. */
+export function missingSpecificAgents(placements: Placements, specifics: Specifics): string[] {
+  return specificAgentNames(placements).filter((name) => {
+    const model = specifics[name]?.model
+    return !model || model.length === 0
+  })
+}
+
+/** Whether every `specific` agent has a direct model ready to save. */
+export function specificsComplete(placements: Placements, specifics: Specifics): boolean {
+  return missingSpecificAgents(placements, specifics).length === 0
+}
+
+/** Progress counters for the specific-model configuration step. */
+export function specificsProgress(
+  placements: Placements,
+  specifics: Specifics,
+): { done: number; total: number; missing: string[] } {
+  const total = specificAgentNames(placements).length
+  const missing = missingSpecificAgents(placements, specifics)
+  return { done: total - missing.length, total, missing }
+}
+
+/**
+ * Set (or replace) one agent's direct model slot. Empty variants are omitted.
+ * Does not mutate the input map.
+ */
+export function setSpecific(
+  specifics: Specifics,
+  name: string,
+  model: string,
+  variant?: string,
+): Specifics {
+  const slot: SpecificSlot = { model }
+  if (variant && variant.length > 0) slot.variant = variant
+  return { ...specifics, [name]: slot }
+}
+
 const PLACEMENT_LABEL: Record<Placement, string> = {
   heavy: "heavy",
   rest: "rest",
+  specific: "specific",
   excluded: "excluded",
 }
 
@@ -79,6 +165,44 @@ export function buildPlacementOptions(
     }),
   )
   options.push({ title: "✓ Done", value: { kind: "done" }, description: "Save placements" })
+  return options
+}
+
+/**
+ * Options for the specific-model configuration step. Lists every `specific`
+ * agent with a complete/incomplete marker, in any order the user prefers, plus
+ * a trailing "Done" row. The wizard blocks finishing while any are incomplete.
+ */
+export function buildSpecificOptions(
+  placements: Placements,
+  specifics: Specifics,
+): SelectOption<{ kind: "agent"; name: string } | { kind: "done" }>[] {
+  const options: SelectOption<{ kind: "agent"; name: string } | { kind: "done" }>[] =
+    specificAgentNames(placements).map((name) => {
+      const slot = specifics[name]
+      const complete = Boolean(slot?.model)
+      const detail = complete
+        ? slot!.variant
+          ? `${slot!.model} (${slot!.variant})`
+          : slot!.model
+        : "not set"
+      return {
+        title: `${complete ? "✓" : "○"} ${name}`,
+        value: { kind: "agent" as const, name },
+        description: detail,
+        category: "Specific models",
+      }
+    })
+
+  const progress = specificsProgress(placements, specifics)
+  const doneReady = progress.missing.length === 0
+  options.push({
+    title: doneReady ? "✓ Done" : `✓ Done (${progress.done}/${progress.total} set)`,
+    value: { kind: "done" },
+    description: doneReady
+      ? "Save specific models"
+      : `Still need: ${progress.missing.join(", ")}`,
+  })
   return options
 }
 
@@ -104,16 +228,38 @@ export function validateProfileName(
   return { ok: true }
 }
 
-/** Assemble a profile from the two chosen model slots and its placements. */
+/**
+ * Assemble a profile from the two tier model slots, placements, and specific
+ * slots. Normalises `specifics` so only agents currently placed as `specific`
+ * keep a slot (orphans are dropped). Incomplete specific agents keep no slot —
+ * callers must refuse to persist until `specificsComplete` is true.
+ */
 export function buildProfile(
   heavyModel: string,
   restModel: string,
   placements: Placements,
   heavyVariant?: string,
+  specifics: Specifics = {},
 ): Profile {
   const heavy: Profile["heavy"] = { model: heavyModel }
   if (heavyVariant && heavyVariant.length > 0) heavy.variant = heavyVariant
-  return { heavy, rest: { model: restModel }, placements: { ...placements } }
+
+  const normalized: Specifics = {}
+  for (const [name, placement] of Object.entries(placements)) {
+    if (placement !== "specific") continue
+    const slot = specifics[name]
+    if (!slot?.model) continue
+    const next: SpecificSlot = { model: slot.model }
+    if (slot.variant && slot.variant.length > 0) next.variant = slot.variant
+    normalized[name] = next
+  }
+
+  return {
+    heavy,
+    rest: { model: restModel },
+    placements: { ...placements },
+    specifics: normalized,
+  }
 }
 
 /** Commit a new (or replacement) profile into the file, optionally activating it. */

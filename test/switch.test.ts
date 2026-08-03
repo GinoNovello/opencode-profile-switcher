@@ -11,8 +11,18 @@ let path: string
 
 const sample: ProfilesFile = {
   profiles: {
-    glm: { heavy: { model: "zai/glm-5" }, rest: { model: "zai/glm-4" }, placements: { build: "heavy" } },
-    grok: { heavy: { model: "xai/grok-heavy" }, rest: { model: "xai/grok-mini" }, placements: {} },
+    glm: {
+      heavy: { model: "zai/glm-5" },
+      rest: { model: "zai/glm-4" },
+      placements: { build: "heavy" },
+      specifics: {},
+    },
+    grok: {
+      heavy: { model: "xai/grok-heavy" },
+      rest: { model: "xai/grok-mini" },
+      placements: {},
+      specifics: {},
+    },
   },
   active: "glm",
 }
