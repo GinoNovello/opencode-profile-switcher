@@ -1,7 +1,7 @@
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import type { Plugin, PluginModule } from "@opencode-ai/plugin"
 import { applyProfile, type MutableConfig } from "./apply.js"
-import { readProfiles } from "./config.js"
+import { readProfiles, writeEffectiveState } from "./config.js"
 
 const LOG_SERVICE = "profile-switcher"
 
@@ -55,6 +55,20 @@ export const server: Plugin = async ({ client }) => {
           )
         }
         return
+      }
+
+      // Persist last-applied model/variant per agent so later exclusions can
+      // restore them across switches and restarts. Never write when the file
+      // was invalid (already bailed above) or when nothing changed.
+      if (result.effectiveChanged) {
+        const written = writeEffectiveState(result.effective, read.path)
+        if (written.status === "invalid") {
+          await log(
+            client,
+            "warn",
+            `profile applied but effective state not persisted (${written.error})`,
+          )
+        }
       }
 
       const parts = [`profile "${result.active}" applied`]

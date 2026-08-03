@@ -1,7 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { defaultProfilesPath } from "./paths.js"
-import { emptyProfilesFile, profilesFileSchema, type ProfilesFile } from "./schema.js"
+import {
+  emptyProfilesFile,
+  profilesFileSchema,
+  type EffectiveSlot,
+  type ProfilesFile,
+} from "./schema.js"
 
 /**
  * Outcome of reading `profiles.json`:
@@ -88,6 +93,26 @@ export function setActiveProfile(name: string, path: string = defaultProfilesPat
   if (current.status === "invalid") return current
 
   const next: ProfilesFile = { ...current.profiles, active: name }
+  writeProfiles(next, path)
+  return { status: "ok", profiles: next, path }
+}
+
+/**
+ * Persist the plugin's per-agent effective model/variant map, preserving
+ * profiles and the active name.
+ *
+ * Refuses to write when the existing file is corrupt (`status: "invalid"`) so
+ * effective-state bookkeeping never clobbers a hand-edit mistake or leaves a
+ * half-applied profiles file.
+ */
+export function writeEffectiveState(
+  effective: Record<string, EffectiveSlot>,
+  path: string = defaultProfilesPath(),
+): ReadResult {
+  const current = readProfiles(path)
+  if (current.status === "invalid") return current
+
+  const next: ProfilesFile = { ...current.profiles, effective }
   writeProfiles(next, path)
   return { status: "ok", profiles: next, path }
 }

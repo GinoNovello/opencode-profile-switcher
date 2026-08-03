@@ -25,6 +25,7 @@ const sample: ProfilesFile = {
     },
   },
   active: "glm",
+  effective: { build: { model: "zai/glm-5" } },
 }
 
 function mockClient(): DisposableClient & { calls: number } {

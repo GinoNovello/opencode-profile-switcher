@@ -35,6 +35,38 @@ describe("profilesFileSchema", () => {
     const parsed = profilesFileSchema.parse({ active: "x" })
     expect(parsed.profiles).toEqual({})
     expect(parsed.active).toBe("x")
+    expect(parsed.effective).toEqual({})
+  })
+
+  test("parses persisted effective agent state", () => {
+    const parsed = profilesFileSchema.parse({
+      profiles: {
+        p: { heavy: { model: "a/b" }, rest: { model: "a/c" }, placements: {}, specifics: {} },
+      },
+      active: "p",
+      effective: {
+        build: { model: "a/b", variant: "max" },
+        explore: { model: "a/c" },
+      },
+    })
+    expect(parsed.effective.build).toEqual({ model: "a/b", variant: "max" })
+    expect(parsed.effective.explore).toEqual({ model: "a/c" })
+  })
+
+  test("defaults effective to an empty map", () => {
+    const parsed = profilesFileSchema.parse({
+      profiles: { p: { heavy: { model: "a/b" }, rest: { model: "a/c" } } },
+      active: "p",
+    })
+    expect(parsed.effective).toEqual({})
+  })
+
+  test("rejects an effective slot with an empty model", () => {
+    const result = profilesFileSchema.safeParse({
+      profiles: { p: { heavy: { model: "a/b" }, rest: { model: "a/c" } } },
+      effective: { build: { model: "" } },
+    })
+    expect(result.success).toBe(false)
   })
 
   test("defaults placements and specifics to empty maps on a profile", () => {

@@ -268,6 +268,7 @@ export function commitProfile(
   input: { name: string; profile: Profile; setActive?: boolean },
 ): ProfilesFile {
   return {
+    ...file,
     profiles: { ...file.profiles, [input.name]: input.profile },
     active: input.setActive === false ? file.active : input.name,
   }

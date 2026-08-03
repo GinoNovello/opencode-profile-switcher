@@ -85,8 +85,11 @@ Each profile places every agent in `heavy`, `rest`, **`specific`**, or
 
 - **`specific`** — the agent gets a direct model (and optional variant) from the
   profile's `specifics` map, without going through a tier.
-- **`excluded`** — the switch never touches that agent's model (e.g. a vision
-  agent that needs a multimodal model outside the profile).
+- **`excluded`** — the agent keeps its last **effective** model and variant (the
+  ones the plugin last applied, even from another profile). If the plugin has
+  never applied a model to that agent, its original opencode config is left
+  untouched. Effective state is persisted in `profiles.json` and survives
+  restarts.
 
 Placements belong to the profile, so the same agent can be `heavy` in one
 profile, `specific` in another and `excluded` in a third. An agent absent from
@@ -119,7 +122,12 @@ but you can also edit it by hand:
       "specifics": {}
     }
   },
-  "active": "xai"
+  "active": "xai",
+  "effective": {
+    "build": { "model": "xai/grok-4.5", "variant": "high" },
+    "explore": { "model": "xai/grok-4.20-0309-non-reasoning" },
+    "docs": { "model": "anthropic/claude-sonnet-4", "variant": "high" }
+  }
 }
 ```
 
@@ -134,6 +142,9 @@ but you can also edit it by hand:
   slots (without a matching placement) are invalid.
 - `active` — the currently applied profile. The plugin re-applies it on every
   start.
+- `effective` — last model and optional variant the plugin applied to each
+  agent. Written automatically on apply; used when a profile places an agent as
+  `excluded`. Hand-editing is rarely needed.
 
 If a profile references a model whose provider isn't connected, the switch still
 applies and warns you (`/connect` to add the provider). A corrupt `profiles.json`
@@ -148,9 +159,11 @@ bun run test:smoke
 ```
 
 The smoke test requires `opencode` on `PATH`. It builds and loads the shipped
-server entrypoint in an isolated XDG sandbox, switches between fake profiles,
-and verifies `GET /config`, `GET /agent`, process identity and session survival.
-It never uses your real opencode config, credentials or providers.
+server entrypoint in an isolated XDG sandbox, switches between fake profiles
+(including an exclusion that preserves a prior effective model+variant),
+restarts the process, and verifies `GET /config`, `GET /agent`, process
+identity and session survival. It never uses your real opencode config,
+credentials or providers.
 
 The TUI override caveat was source-verified against opencode 1.18.11: its local
 model store gives a manual per-agent choice priority over refreshed agent/config

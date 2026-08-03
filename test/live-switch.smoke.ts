@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { writeProfiles } from "../src/config.js"
+import { readProfiles, writeProfiles } from "../src/config.js"
 import type { ProfilesFile } from "../src/schema.js"
 import { switchProfile, type DisposableClient } from "../src/switch.js"
 
@@ -58,28 +58,35 @@ test("switches the shipped server plugin live without restarting opencode", asyn
     })}\n`,
   )
 
-  const placements = {
-    build: "heavy",
-    plan: "heavy",
-    explore: "rest",
-    docs: "specific",
-  } as const
+  // alpha applies build/explore/docs; beta excludes build so it must keep
+  // alpha's effective model+variant after the live switch (and after restart).
   const profiles: ProfilesFile = {
     profiles: {
       alpha: {
-        heavy: { model: "alpha-provider/alpha-heavy" },
+        heavy: { model: "alpha-provider/alpha-heavy", variant: "high" },
         rest: { model: "alpha-provider/alpha-rest" },
-        placements: { ...placements },
+        placements: {
+          build: "heavy",
+          plan: "heavy",
+          explore: "rest",
+          docs: "specific",
+        },
         specifics: { docs: { model: "alpha-provider/alpha-docs", variant: "fast" } },
       },
       beta: {
         heavy: { model: "beta-provider/beta-heavy" },
         rest: { model: "beta-provider/beta-rest" },
-        placements: { ...placements },
+        placements: {
+          build: "excluded",
+          plan: "heavy",
+          explore: "rest",
+          docs: "specific",
+        },
         specifics: { docs: { model: "beta-provider/beta-docs", variant: "max" } },
       },
     },
     active: "alpha",
+    effective: {},
   }
   writeProfiles(profiles, profilesPath)
 
@@ -96,12 +103,17 @@ test("switches the shipped server plugin live without restarting opencode", asyn
   delete env.OPENCODE_CONFIG_DIR
   delete env.ORCA_OPENCODE_CONFIG_DIR
 
-  const serverProcess = Bun.spawn(
-    [opencode!, "serve", "--port", String(port), "--hostname", "127.0.0.1", "--print-logs"],
-    { cwd: projectDir, env, stdout: "pipe", stderr: "pipe" },
-  )
-  const stdout = new Response(serverProcess.stdout).text()
-  const stderr = new Response(serverProcess.stderr).text()
+  const spawnServer = () =>
+    Bun.spawn([opencode!, "serve", "--port", String(port), "--hostname", "127.0.0.1", "--print-logs"], {
+      cwd: projectDir,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+
+  let serverProcess = spawnServer()
+  let stdout = new Response(serverProcess.stdout).text()
+  let stderr = new Response(serverProcess.stderr).text()
 
   const getJson = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(`${baseUrl}${path}`, init)
@@ -121,7 +133,25 @@ test("switches the shipped server plugin live without restarting opencode", asyn
       (config) => config.model === "alpha-provider/alpha-heavy",
     )
     expect(initialConfig.small_model).toBe("alpha-provider/alpha-rest")
+    expect(initialConfig.agent?.build).toEqual({
+      model: "alpha-provider/alpha-heavy",
+      variant: "high",
+    })
     expect(initialConfig.agent?.docs).toEqual({
+      model: "alpha-provider/alpha-docs",
+      variant: "fast",
+    })
+
+    // Effective state must be persisted after the first apply.
+    const afterBoot = await waitFor(
+      () => readProfiles(profilesPath),
+      (read) => read.status === "ok" && read.profiles.effective.build?.model === "alpha-provider/alpha-heavy",
+    )
+    expect(afterBoot.profiles.effective.build).toEqual({
+      model: "alpha-provider/alpha-heavy",
+      variant: "high",
+    })
+    expect(afterBoot.profiles.effective.docs).toEqual({
       model: "alpha-provider/alpha-docs",
       variant: "fast",
     })
@@ -154,32 +184,74 @@ test("switches the shipped server plugin live without restarting opencode", asyn
     expect(switched).toEqual({ ok: true, active: "beta", disposed: true })
 
     const activeConfig = await waitFor(
-      () => getJson<{ model?: string; small_model?: string }>("/config"),
+      () =>
+        getJson<{
+          model?: string
+          small_model?: string
+          agent?: Record<string, { model?: string; variant?: string }>
+        }>("/config"),
       (config) => config.model === "beta-provider/beta-heavy",
     )
     expect(activeConfig.small_model).toBe("beta-provider/beta-rest")
+    // build is excluded on beta → keeps alpha's effective model + variant.
+    expect(activeConfig.agent?.build).toEqual({
+      model: "alpha-provider/alpha-heavy",
+      variant: "high",
+    })
+    expect(activeConfig.agent?.docs).toEqual({
+      model: "beta-provider/beta-docs",
+      variant: "max",
+    })
 
     const activeAgents = await getJson<AgentResponse[]>("/agent")
     expect(activeAgents.find((agent) => agent.name === "build")?.model).toEqual({
-      providerID: "beta-provider",
-      modelID: "beta-heavy",
+      providerID: "alpha-provider",
+      modelID: "alpha-heavy",
     })
     expect(activeAgents.find((agent) => agent.name === "explore")?.model).toEqual({
       providerID: "beta-provider",
       modelID: "beta-rest",
     })
 
-    const activeFull = await getJson<{
-      agent?: Record<string, { model?: string; variant?: string }>
-    }>("/config")
-    expect(activeFull.agent?.docs).toEqual({
-      model: "beta-provider/beta-docs",
-      variant: "max",
-    })
-
     const sessions = await getJson<Array<{ id: string }>>("/session")
     expect(sessions.some((item) => item.id === session.id)).toBe(true)
     expect(serverProcess.pid).toBe(pid)
+    expect(serverProcess.exitCode).toBeNull()
+
+    // Full process restart: exclusion + effective state must survive.
+    serverProcess.kill("SIGTERM")
+    await serverProcess.exited
+    await stdout
+    await stderr
+
+    // Confirm effective state is still on disk before reboot.
+    const onDisk = JSON.parse(readFileSync(profilesPath, "utf8")) as ProfilesFile
+    expect(onDisk.active).toBe("beta")
+    expect(onDisk.effective.build).toEqual({
+      model: "alpha-provider/alpha-heavy",
+      variant: "high",
+    })
+
+    serverProcess = spawnServer()
+    stdout = new Response(serverProcess.stdout).text()
+    stderr = new Response(serverProcess.stderr).text()
+
+    const afterRestart = await waitFor(
+      () =>
+        getJson<{
+          model?: string
+          agent?: Record<string, { model?: string; variant?: string }>
+        }>("/config"),
+      (config) => config.model === "beta-provider/beta-heavy",
+    )
+    expect(afterRestart.agent?.build).toEqual({
+      model: "alpha-provider/alpha-heavy",
+      variant: "high",
+    })
+    expect(afterRestart.agent?.docs).toEqual({
+      model: "beta-provider/beta-docs",
+      variant: "max",
+    })
     expect(serverProcess.exitCode).toBeNull()
   } catch (error) {
     failure = error
@@ -192,4 +264,4 @@ test("switches the shipped server plugin live without restarting opencode", asyn
       throw new Error(`${(failure as Error).stack ?? failure}\n\nopencode output:\n${logs}`)
     }
   }
-}, 30_000)
+}, 45_000)
