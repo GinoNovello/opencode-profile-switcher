@@ -1,6 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
+import type { z } from "zod"
 import { defaultProfilesPath } from "./paths.js"
+import {
+  isLegacyProfilesFile,
+  legacyProfilesFileSchema,
+  migrateLegacyProfilesFile,
+} from "./legacy.js"
 import {
   emptyProfilesFile,
   profilesFileSchema,
@@ -23,6 +29,12 @@ export interface ReadResult {
   path: string
   /** Human-readable reason present when `status` is `missing` or `invalid`. */
   error?: string
+  /**
+   * True when the file on disk was in the `0.1.2` format and was migrated in
+   * memory. Nothing is rewritten here — the next successful write persists the
+   * current format.
+   */
+  migrated?: boolean
 }
 
 /**
@@ -55,19 +67,35 @@ export function readProfiles(path: string = defaultProfilesPath()): ReadResult {
     }
   }
 
-  const parsed = profilesFileSchema.safeParse(json)
-  if (!parsed.success) {
-    return {
-      status: "invalid",
-      profiles: emptyProfilesFile(),
-      path,
-      error: `schema validation failed: ${parsed.error.issues
-        .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
-        .join("; ")}`,
-    }
+  if (isLegacyProfilesFile(json)) {
+    const legacy = legacyProfilesFileSchema.safeParse(json)
+    if (!legacy.success) return invalid(path, legacy.error.issues)
+
+    // Re-validate the migration output against the current schema rather than
+    // trusting the hand-built object: it must satisfy the same cross-field
+    // invariants as any other profiles file before callers act on it.
+    const migrated = profilesFileSchema.safeParse(migrateLegacyProfilesFile(legacy.data))
+    if (!migrated.success) return invalid(path, migrated.error.issues)
+
+    return { status: "ok", profiles: migrated.data, path, migrated: true }
   }
 
+  const parsed = profilesFileSchema.safeParse(json)
+  if (!parsed.success) return invalid(path, parsed.error.issues)
+
   return { status: "ok", profiles: parsed.data, path }
+}
+
+/** An `invalid` result carrying a readable summary of the schema failures. */
+function invalid(path: string, issues: z.core.$ZodIssue[]): ReadResult {
+  return {
+    status: "invalid",
+    profiles: emptyProfilesFile(),
+    path,
+    error: `schema validation failed: ${issues
+      .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+      .join("; ")}`,
+  }
 }
 
 /**

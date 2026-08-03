@@ -75,6 +75,9 @@ export const server: Plugin = async ({ client }) => {
       if (result.unassigned.length > 0) {
         parts.push(`unassigned agents fell back to rest: ${result.unassigned.join(", ")}`)
       }
+      if (read.migrated) {
+        parts.push("migrated from the 0.1.2 format")
+      }
       await log(client, "info", parts.join(" | "))
     },
   }

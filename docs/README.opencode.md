@@ -96,28 +96,40 @@ to clear it.
 **Tiers:** `heavy` (reasoning/orchestration + global `model`) and `rest`
 (everything else + global `small_model`).
 
-**Assignment** agent→tier is shared across all profiles. Unassigned agents fall
-back to `rest`. **Exclusions** are never touched by a switch.
+**Placements** belong to each profile: an agent is `heavy`, `rest`, `specific`
+(a direct model) or `excluded` (a switch never touches it). The same agent can
+be placed differently in each profile. Agents absent from the active profile
+fall back to `rest`.
 
 **On disk:** `~/.config/opencode/profiles.json` (wizard writes it):
 
 ```json
 {
-  "assignment": { "build": "heavy", "explore": "rest" },
-  "exclusions": ["vision"],
   "profiles": {
     "xai": {
       "heavy": { "model": "xai/grok-4.5", "variant": "high" },
-      "rest": { "model": "xai/grok-4.20-0309-non-reasoning" }
+      "rest": { "model": "xai/grok-4.20-0309-non-reasoning" },
+      "placements": { "build": "heavy", "explore": "rest", "docs": "specific", "vision": "excluded" },
+      "specifics": { "docs": { "model": "anthropic/claude-sonnet-4", "variant": "high" } }
     }
   },
-  "active": "xai"
+  "active": "xai",
+  "effective": { "build": { "model": "xai/grok-4.5", "variant": "high" } }
 }
 ```
 
-- `variant` is optional on the `heavy` slot.
+- `variant` is optional on the `heavy` and `specific` slots.
 - `active` is re-applied on every start via the server `config` hook.
+- `effective` records the last model the plugin applied per agent, so `excluded`
+  agents keep it across switches and restarts.
 - Corrupt `profiles.json` never breaks startup; `/profile` can offer the wizard.
+
+**Upgrading from 0.1.2:** files with the old top-level `assignment` and
+`exclusions` are migrated automatically on read — both are copied into every
+existing profile's `placements`, keeping profile names, models, variants and the
+active profile. No `specific` placements are created. Reading never rewrites the
+file by itself — the current format lands on the next successful save, normally
+the first start after upgrading.
 
 | Export | Config | Role |
 | --- | --- | --- |
