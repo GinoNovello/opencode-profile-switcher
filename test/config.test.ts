@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -8,6 +8,7 @@ import {
   writeEffectiveState,
   writeProfiles,
 } from "../src/config.js"
+import { applyProfile, type MutableConfig } from "../src/apply.js"
 import type { ProfilesFile } from "../src/schema.js"
 
 let dir: string
@@ -130,5 +131,126 @@ describe("writeEffectiveState", () => {
     const result = writeEffectiveState({ build: { model: "a/b" } }, p)
     expect(result.status).toBe("invalid")
     expect(readProfiles(p).status).toBe("invalid")
+  })
+})
+
+describe("migration from the 0.1.2 format", () => {
+  /** A profiles.json exactly as released 0.1.2 wrote it. */
+  const legacy = {
+    assignment: { build: "heavy", explore: "rest", plan: "heavy" },
+    exclusions: ["vision"],
+    profiles: {
+      xai: {
+        heavy: { model: "xai/grok-4.5", variant: "high" },
+        rest: { model: "xai/grok-mini" },
+      },
+      zai: {
+        heavy: { model: "zai/glm-5" },
+        rest: { model: "zai/glm-4" },
+      },
+    },
+    active: "xai",
+  }
+
+  function writeLegacy(name = "legacy.json"): string {
+    const p = join(dir, name)
+    writeFileSync(p, JSON.stringify(legacy, null, 2), "utf8")
+    return p
+  }
+
+  test("copies the shared assignment into every profile's placements", () => {
+    const result = readProfiles(writeLegacy())
+    expect(result.status).toBe("ok")
+    expect(result.profiles.profiles.xai.placements).toEqual({
+      build: "heavy",
+      explore: "rest",
+      plan: "heavy",
+      vision: "excluded",
+    })
+    expect(result.profiles.profiles.zai.placements).toEqual({
+      build: "heavy",
+      explore: "rest",
+      plan: "heavy",
+      vision: "excluded",
+    })
+  })
+
+  test("preserves profile names, tier models, variants and the active profile", () => {
+    const result = readProfiles(writeLegacy())
+    expect(Object.keys(result.profiles.profiles).sort()).toEqual(["xai", "zai"])
+    expect(result.profiles.profiles.xai.heavy).toEqual({ model: "xai/grok-4.5", variant: "high" })
+    expect(result.profiles.profiles.xai.rest).toEqual({ model: "xai/grok-mini" })
+    expect(result.profiles.profiles.zai.heavy).toEqual({ model: "zai/glm-5" })
+    expect(result.profiles.active).toBe("xai")
+    expect(result.migrated).toBe(true)
+  })
+
+  test("invents no specific placements and no prior effective state", () => {
+    const result = readProfiles(writeLegacy())
+    for (const profile of Object.values(result.profiles.profiles)) {
+      expect(profile.specifics).toEqual({})
+      expect(Object.values(profile.placements)).not.toContain("specific")
+    }
+    expect(result.profiles.effective).toEqual({})
+  })
+
+  test("a migrated profile is immediately applicable with the new behavior", () => {
+    const migrated = readProfiles(writeLegacy()).profiles
+    const cfg: MutableConfig = { agent: { vision: { model: "anthropic/claude-vision" } } }
+
+    const result = applyProfile(cfg, migrated)
+
+    expect(result.applied).toBe(true)
+    expect(cfg.model).toBe("xai/grok-4.5")
+    expect(cfg.small_model).toBe("xai/grok-mini")
+    expect(cfg.agent?.build).toEqual({ model: "xai/grok-4.5", variant: "high" })
+    expect(cfg.agent?.explore).toEqual({ model: "xai/grok-mini" })
+    // Excluded with no plugin history: its original opencode config survives.
+    expect(cfg.agent?.vision).toEqual({ model: "anthropic/claude-vision" })
+  })
+
+  test("reading alone never rewrites the file on disk", () => {
+    const p = writeLegacy()
+    const before = readFileSync(p, "utf8")
+    readProfiles(p)
+    expect(readFileSync(p, "utf8")).toBe(before)
+  })
+
+  test("the next successful save persists only the current format", () => {
+    const p = writeLegacy()
+    // A switch is the ordinary first write after an upgrade.
+    setActiveProfile("zai", p)
+
+    const onDisk = JSON.parse(readFileSync(p, "utf8"))
+    expect(onDisk).not.toHaveProperty("assignment")
+    expect(onDisk).not.toHaveProperty("exclusions")
+    expect(onDisk.active).toBe("zai")
+    expect(onDisk.profiles.xai.placements.vision).toBe("excluded")
+    expect(onDisk.effective).toEqual({})
+  })
+
+  test("migration is idempotent — re-reading the saved file changes nothing", () => {
+    const p = writeLegacy()
+    const migrated = readProfiles(p).profiles
+    writeProfiles(migrated, p)
+
+    const reread = readProfiles(p)
+    expect(reread.status).toBe("ok")
+    expect(reread.migrated).toBeUndefined()
+    expect(reread.profiles).toEqual(migrated)
+  })
+
+  test("a malformed 0.1.2 file stays invalid and is left untouched", () => {
+    const p = join(dir, "bad-legacy.json")
+    const broken = JSON.stringify({
+      assignment: { build: "nonsense-tier" },
+      profiles: { xai: { heavy: { model: "xai/grok" }, rest: { model: "xai/mini" } } },
+      active: "xai",
+    })
+    writeFileSync(p, broken, "utf8")
+
+    expect(readProfiles(p).status).toBe("invalid")
+    expect(setActiveProfile("xai", p).status).toBe("invalid")
+    expect(readFileSync(p, "utf8")).toBe(broken)
   })
 })

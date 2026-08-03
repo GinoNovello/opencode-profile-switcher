@@ -150,6 +150,21 @@ If a profile references a model whose provider isn't connected, the switch still
 applies and warns you (`/connect` to add the provider). A corrupt `profiles.json`
 never breaks startup — `/profile` offers to run the wizard.
 
+### Upgrading from 0.1.2
+
+`0.1.2` kept a single top-level `assignment` and `exclusions` pair shared by all
+profiles. Those files are migrated automatically on read: the shared assignment
+and exclusions are copied into every existing profile's `placements`, and your
+profile names, `heavy`/`rest` models, variants and `active` profile are kept as
+they were. Migration adds no `specific` placements and invents no `effective`
+state, so nothing changes model until you edit a profile.
+
+The upgrade needs no manual step. Reading never rewrites the file by itself; the
+current format is persisted by the next successful save, which in practice is
+the first start after upgrading (applying the active profile records `effective`
+state). A `0.1.2` file that fails validation is reported as corrupt and left
+untouched, exactly like any other invalid `profiles.json`.
+
 ## Development
 
 ```sh
