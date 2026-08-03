@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { readProfiles, setActiveProfile, writeProfiles } from "../src/config.js"
+import {
+  readProfiles,
+  setActiveProfile,
+  writeEffectiveState,
+  writeProfiles,
+} from "../src/config.js"
 import type { ProfilesFile } from "../src/schema.js"
 
 let dir: string
@@ -24,6 +29,10 @@ const sample: ProfilesFile = {
     },
   },
   active: "glm",
+  effective: {
+    build: { model: "zai/glm-5", variant: "max" },
+    explore: { model: "zai/glm-4" },
+  },
 }
 
 beforeEach(() => {
@@ -39,7 +48,7 @@ describe("readProfiles", () => {
   test("missing file returns empty state with signal", () => {
     const result = readProfiles(path)
     expect(result.status).toBe("missing")
-    expect(result.profiles).toEqual({ profiles: {}, active: "" })
+    expect(result.profiles).toEqual({ profiles: {}, active: "", effective: {} })
     expect(result.error).toBeDefined()
   })
 
@@ -88,8 +97,38 @@ describe("setActiveProfile", () => {
     expect(readProfiles(p).status).toBe("invalid")
   })
 
+  test("preserves effective state when changing active", () => {
+    writeProfiles(sample, path)
+    setActiveProfile("grok", path)
+    expect(readProfiles(path).profiles.effective).toEqual(sample.effective)
+  })
+
   test("does not touch the real HOME config path", () => {
     // Guard: tests only ever use temp paths.
     expect(path.startsWith(tmpdir())).toBe(true)
+  })
+})
+
+describe("writeEffectiveState", () => {
+  test("persists effective agent state without changing active or profiles", () => {
+    writeProfiles(sample, path)
+    const next = {
+      build: { model: "xai/grok-heavy" },
+      vision: { model: "anthropic/claude-vision", variant: "high" },
+    }
+    const result = writeEffectiveState(next, path)
+    expect(result.status).toBe("ok")
+    const read = readProfiles(path)
+    expect(read.profiles.effective).toEqual(next)
+    expect(read.profiles.active).toBe("glm")
+    expect(read.profiles.profiles.glm.heavy.model).toBe("zai/glm-5")
+  })
+
+  test("refuses to clobber a corrupt file when writing effective state", () => {
+    const p = join(dir, "corrupt-eff.json")
+    writeFileSync(p, "{{{", "utf8")
+    const result = writeEffectiveState({ build: { model: "a/b" } }, p)
+    expect(result.status).toBe("invalid")
+    expect(readProfiles(p).status).toBe("invalid")
   })
 })

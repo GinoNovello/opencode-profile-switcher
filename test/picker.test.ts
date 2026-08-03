@@ -34,6 +34,7 @@ function makeFile(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
   return {
     profiles: { glm, claude },
     active: "glm",
+    effective: {},
     ...overrides,
   }
 }

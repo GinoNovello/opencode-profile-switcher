@@ -39,6 +39,14 @@ export const restTierSchema = z.object({
 export const specificSlotSchema = heavyTierSchema
 
 /**
+ * Last model (+ optional variant) the plugin actually applied to an agent.
+ * Used so an `excluded` placement can restore that complete slot across
+ * profile switches and process restarts. See CONTEXT.md ("exclusión") and
+ * ADR-0002.
+ */
+export const effectiveSlotSchema = heavyTierSchema
+
+/**
  * A single profile: one model per tier, its own agent placements, and a direct
  * model slot for every agent placed as `specific`. Activating a profile fully
  * describes how every agent is modelled — no shared, global assignment.
@@ -77,6 +85,7 @@ export const profileSchema = z
  * The full on-disk shape of `~/.config/opencode/profiles.json`:
  * - `profiles`: named profiles, each `{ heavy, rest, placements, specifics }`.
  * - `active`: the currently applied profile name.
+ * - `effective`: last model/variant the plugin applied per agent (for exclusions).
  *
  * Every field has a default so a partial/hand-edited file still parses into a
  * complete, well-formed value.
@@ -84,15 +93,17 @@ export const profileSchema = z
 export const profilesFileSchema = z.object({
   profiles: z.record(z.string(), profileSchema).default({}),
   active: z.string().default(""),
+  effective: z.record(z.string(), effectiveSlotSchema).default({}),
 })
 
 export type HeavyTier = z.infer<typeof heavyTierSchema>
 export type RestTier = z.infer<typeof restTierSchema>
 export type SpecificSlot = z.infer<typeof specificSlotSchema>
+export type EffectiveSlot = z.infer<typeof effectiveSlotSchema>
 export type Profile = z.infer<typeof profileSchema>
 export type ProfilesFile = z.infer<typeof profilesFileSchema>
 
 /** An empty, valid profiles file — the fallback for a missing/corrupt file. */
 export function emptyProfilesFile(): ProfilesFile {
-  return { profiles: {}, active: "" }
+  return { profiles: {}, active: "", effective: {} }
 }

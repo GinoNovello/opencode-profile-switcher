@@ -19,6 +19,7 @@ function makeProfiles(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
       },
     },
     active: "glm",
+    effective: {},
     ...overrides,
   }
 }
@@ -75,11 +76,122 @@ describe("applyProfile", () => {
     expect(cfg.agent?.explore?.model).toBe("zai/glm-4")
   })
 
-  test("excluded agent is left completely untouched", () => {
+  test("excluded agent with no effective history is left completely untouched", () => {
     const cfg: MutableConfig = { agent: { vision: { model: "anthropic/claude-vision" } } }
     const result = applyProfile(cfg, makeProfiles())
     expect(cfg.agent?.vision).toEqual({ model: "anthropic/claude-vision" })
     expect(result.changedAgents).not.toContain("vision")
+  })
+
+  test("applying heavy/rest/specific records the chosen model and variant as effective", () => {
+    const cfg: MutableConfig = {}
+    const result = applyProfile(cfg, makeProfiles())
+    expect(result.effective.build).toEqual({ model: "zai/glm-5", variant: "max" })
+    expect(result.effective.explore).toEqual({ model: "zai/glm-4" })
+    expect(result.effective.docs).toEqual({ model: "anthropic/claude-docs", variant: "high" })
+    expect(result.effective.vision).toBeUndefined()
+    expect(result.effectiveChanged).toBe(true)
+  })
+
+  test("excluded agent restores its last persisted effective model and variant", () => {
+    const profiles = makeProfiles({
+      effective: { vision: { model: "xai/grok-vision", variant: "high" } },
+    })
+    const cfg: MutableConfig = { agent: { vision: { model: "anthropic/claude-vision" } } }
+    const result = applyProfile(cfg, profiles)
+    expect(cfg.agent?.vision).toEqual({ model: "xai/grok-vision", variant: "high" })
+    expect(result.changedAgents).toContain("vision")
+    // Restoring does not invent a new effective entry shape.
+    expect(result.effective.vision).toEqual({ model: "xai/grok-vision", variant: "high" })
+  })
+
+  test("excluded agent restores a complete effective slot without a variant, clearing stale ones", () => {
+    const profiles = makeProfiles({
+      effective: { vision: { model: "xai/grok-vision" } },
+    })
+    const cfg: MutableConfig = {
+      agent: { vision: { model: "anthropic/claude-vision", variant: "reasoning" } },
+    }
+    applyProfile(cfg, profiles)
+    expect(cfg.agent?.vision).toEqual({ model: "xai/grok-vision" })
+    expect(cfg.agent?.vision?.variant).toBeUndefined()
+  })
+
+  test("switching from applied to excluded preserves the prior profile's effective state", () => {
+    const profiles: ProfilesFile = {
+      profiles: {
+        glm: {
+          heavy: { model: "zai/glm-5", variant: "max" },
+          rest: { model: "zai/glm-4" },
+          placements: { build: "heavy" },
+          specifics: {},
+        },
+        pin: {
+          heavy: { model: "xai/grok-heavy" },
+          rest: { model: "xai/grok-mini" },
+          placements: { build: "excluded" },
+          specifics: {},
+        },
+      },
+      active: "glm",
+      effective: {},
+    }
+    const cfg: MutableConfig = {}
+    const afterGlm = applyProfile(cfg, profiles)
+    expect(cfg.agent?.build).toEqual({ model: "zai/glm-5", variant: "max" })
+    expect(afterGlm.effective.build).toEqual({ model: "zai/glm-5", variant: "max" })
+
+    // Activate the excluding profile with the effective state from the prior apply.
+    const pinProfiles: ProfilesFile = {
+      ...profiles,
+      active: "pin",
+      effective: afterGlm.effective,
+    }
+    const afterPin = applyProfile(cfg, pinProfiles)
+    expect(cfg.agent?.build).toEqual({ model: "zai/glm-5", variant: "max" })
+    expect(afterPin.effective.build).toEqual({ model: "zai/glm-5", variant: "max" })
+  })
+
+  test("applying a different placement overwrites prior effective state completely", () => {
+    const profiles = makeProfiles({
+      effective: { build: { model: "old/model", variant: "old-var" } },
+    })
+    // rest tier has no variant — must replace the whole prior slot, not merge.
+    const restOnly = makeProfiles({
+      profiles: {
+        glm: {
+          heavy: { model: "zai/glm-5" },
+          rest: { model: "zai/glm-4" },
+          placements: { build: "rest" },
+          specifics: {},
+        },
+      },
+      effective: profiles.effective,
+    })
+    const cfg: MutableConfig = {}
+    const result = applyProfile(cfg, restOnly)
+    expect(cfg.agent?.build).toEqual({ model: "zai/glm-4" })
+    expect(result.effective.build).toEqual({ model: "zai/glm-4" })
+    expect(result.effective.build?.variant).toBeUndefined()
+  })
+
+  test("incomplete specific does not update effective state for that agent", () => {
+    const profiles = {
+      profiles: {
+        glm: {
+          heavy: { model: "zai/glm-5" },
+          rest: { model: "zai/glm-4" },
+          placements: { docs: "specific" as const },
+          specifics: {},
+        },
+      },
+      active: "glm",
+      effective: { docs: { model: "keep/effective", variant: "v" } },
+    } as ProfilesFile
+    const cfg: MutableConfig = {}
+    const result = applyProfile(cfg, profiles)
+    expect(result.effective.docs).toEqual({ model: "keep/effective", variant: "v" })
+    expect(result.changedAgents).not.toContain("docs")
   })
 
   test("the same agent can be placed differently per profile", () => {
@@ -99,6 +211,7 @@ describe("applyProfile", () => {
         },
       },
       active: "grok",
+      effective: {},
     }
     const cfg: MutableConfig = {}
     applyProfile(cfg, profiles)
@@ -135,6 +248,7 @@ describe("applyProfile", () => {
         },
       },
       active: "glm",
+      effective: {},
     } as ProfilesFile
     const cfg: MutableConfig = { agent: { docs: { model: "keep-me", variant: "old" } } }
     const result = applyProfile(cfg, profiles)
