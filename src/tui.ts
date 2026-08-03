@@ -76,6 +76,12 @@ function showSelect<Value>(
     title: string
     placeholder?: string
     options: SelectOption<Value>[]
+    /**
+     * Row the dialog should seek to on mount. `dialog.replace` mounts a *fresh*
+     * DialogSelect whose selection starts at row 0, so any flow that re-renders
+     * itself in place must pass this or the cursor jumps to the top of the list.
+     */
+    current?: Value
     onSelect: (value: Value) => void
   },
 ): void {
@@ -83,6 +89,7 @@ function showSelect<Value>(
     ctx.api.ui.DialogSelect<Value>({
       title: input.title,
       placeholder: input.placeholder,
+      current: input.current,
       options: input.options.map((option) => ({
         title: option.title,
         value: option.value,
@@ -121,6 +128,27 @@ function showConfirm(
       onCancel: input.onCancel ?? (() => closeDialogs(ctx)),
     }),
   )
+}
+
+/** The value shape both agent-row editors below put on their select options. */
+type AgentRow = { kind: "agent"; name: string } | { kind: "done" }
+
+/**
+ * Resolve `remembered` against a freshly built option list and return *that
+ * list's* value object. Returning the new object (rather than the remembered
+ * one) keeps reference identity with the option the dialog is rendering, so
+ * `current` matches however opencode compares it. Returns `undefined` on the
+ * first render or when the row no longer exists.
+ */
+function rowToSeek(options: SelectOption<AgentRow>[], remembered?: AgentRow): AgentRow | undefined {
+  if (!remembered) return undefined
+  return options.find(
+    (option) =>
+      option.value.kind === remembered.kind &&
+      (option.value.kind !== "agent" ||
+        remembered.kind !== "agent" ||
+        option.value.name === remembered.name),
+  )?.value
 }
 
 // --- shared building blocks -------------------------------------------------
@@ -286,10 +314,16 @@ async function editPlacements(
   let placements: Placements = { ...initialPlacements }
   let specifics: Specifics = { ...initialSpecifics }
 
+  // The row the user last acted on, so the re-render lands the cursor back on
+  // it instead of snapping to the top of the agent list.
+  let seek: AgentRow | undefined
+
   const render = () => {
+    const options = buildPlacementOptions(placements, agents)
     showSelect(ctx, {
       title: "Placements — select an agent to cycle heavy → rest → specific → excluded",
-      options: buildPlacementOptions(placements, agents),
+      options,
+      current: rowToSeek(options, seek),
       onSelect: (value) => {
         if (value.kind === "done") {
           onDone(placements, specifics)
@@ -298,6 +332,7 @@ async function editPlacements(
         const next = cycleAgentPlacement(placements, specifics, value.name)
         placements = next.placements
         specifics = next.specifics
+        seek = value
         render()
       },
     })
@@ -322,12 +357,15 @@ function configureSpecifics(
   }
 
   let specifics: Specifics = { ...initial }
+  let seek: AgentRow | undefined
 
   const render = () => {
     const progress = specificsProgress(placements, specifics)
+    const options = buildSpecificOptions(placements, specifics)
     showSelect(ctx, {
       title: `Specific models — ${progress.done}/${progress.total} set (any order)`,
-      options: buildSpecificOptions(placements, specifics),
+      options,
+      current: rowToSeek(options, seek),
       onSelect: (value) => {
         if (value.kind === "done") {
           if (!specificsComplete(placements, specifics)) {
@@ -336,6 +374,7 @@ function configureSpecifics(
               "error",
               `Set a model for: ${progress.missing.join(", ")}`,
             )
+            seek = value
             render()
             return
           }
@@ -344,6 +383,7 @@ function configureSpecifics(
         }
         pickOneModel(ctx, `Model for ${value.name}`, (model, variant) => {
           specifics = setSpecific(specifics, value.name, model, variant)
+          seek = value
           render()
         })
       },
