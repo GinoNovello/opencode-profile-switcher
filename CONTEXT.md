@@ -28,6 +28,10 @@ _Avoid_: modelo fijo, modelo global, exclusión
 El perfil actualmente aplicado; se persiste en `profiles.json` y el hook `config` lo re-aplica en cada boot.
 _Avoid_: perfil actual, selección
 
+**Duplicación de perfil**:
+Crea un perfil nuevo, independiente y autocontenido con la misma configuración completa que el de origen (modelos `heavy` y `rest`, asignaciones, modelos específicos, variantes y exclusiones); no altera el estado global activo ni el efectivo.
+_Avoid_: clone, clonar, copia
+
 **Wizard**:
 El flujo interactivo dentro de opencode (diálogos TUI) que crea o edita perfiles completos, incluidas sus asignaciones, exclusiones y modelos, validando contra los providers realmente conectados.
 _Avoid_: setup manual, instalador

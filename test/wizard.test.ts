@@ -6,6 +6,7 @@ import {
   buildProfile,
   buildSpecificOptions,
   commitProfile,
+  duplicateProfile,
   copyPlacements,
   copySpecifics,
   cycleAgentPlacement,
@@ -21,6 +22,7 @@ import {
   specificAgentNames,
   specificsComplete,
   specificsProgress,
+  suggestedDuplicateName,
   updateProfile,
   validateProfileName,
 } from "../src/wizard.js"
@@ -284,6 +286,98 @@ describe("validateProfileName", () => {
   test("allows renaming to the same name (self)", () =>
     expect(validateProfileName("glm", ["glm"], "glm").ok).toBe(true))
   test("accepts a fresh name", () => expect(validateProfileName("new", ["glm"]).ok).toBe(true))
+})
+
+describe("suggestedDuplicateName", () => {
+  test("suggests '<source> copy', then numbered copies until unique", () => {
+    expect(suggestedDuplicateName("glm", [])).toBe("glm copy")
+    expect(suggestedDuplicateName("glm", ["glm"])).toBe("glm copy")
+    expect(suggestedDuplicateName("glm", ["glm", "glm copy"])).toBe("glm copy 2")
+    expect(suggestedDuplicateName("glm", ["glm", "glm copy", "glm copy 2"])).toBe("glm copy 3")
+    expect(suggestedDuplicateName("glm", ["glm", "glm copy 2"])).toBe("glm copy")
+  })
+})
+
+describe("duplicateProfile", () => {
+  test("deep-duplicates heavy/rest/placements/specifics, preserving stale strings and independence", () => {
+    const source: Profile = {
+      heavy: { model: "stale/gone-model", variant: "stale-variant" },
+      rest: { model: "stale/rest-gone" },
+      placements: {
+        build: "heavy",
+        explore: "rest",
+        vision: "excluded",
+        docs: "specific",
+      },
+      specifics: { docs: { model: "stale/docs-gone", variant: "old" } },
+    }
+
+    const draft = duplicateProfile(source)
+    expect(draft).toEqual(source)
+    expect(draft).not.toBe(source)
+    expect(draft.heavy).not.toBe(source.heavy)
+    expect(draft.rest).not.toBe(source.rest)
+    expect(draft.placements).not.toBe(source.placements)
+    expect(draft.specifics).not.toBe(source.specifics)
+    expect(draft.specifics.docs).not.toBe(source.specifics.docs)
+
+    draft.heavy.model = "mutated/heavy"
+    draft.heavy.variant = "mutated"
+    draft.rest.model = "mutated/rest"
+    draft.placements.build = "rest"
+    draft.placements.vision = "heavy"
+    draft.specifics.docs = { model: "mutated/docs" }
+    expect(source.heavy).toEqual({ model: "stale/gone-model", variant: "stale-variant" })
+    expect(source.rest).toEqual({ model: "stale/rest-gone" })
+    expect(source.placements).toEqual({
+      build: "heavy",
+      explore: "rest",
+      vision: "excluded",
+      docs: "specific",
+    })
+    expect(source.specifics).toEqual({ docs: { model: "stale/docs-gone", variant: "old" } })
+  })
+})
+
+describe("duplicate profile commit composition", () => {
+  test("saves an inactive duplicate without changing active or effective", () => {
+    const source: Profile = {
+      heavy: { model: "stale/gone-model", variant: "stale-variant" },
+      rest: { model: "stale/rest-gone" },
+      placements: {
+        build: "heavy",
+        explore: "rest",
+        vision: "excluded",
+        docs: "specific",
+      },
+      specifics: { docs: { model: "stale/docs-gone", variant: "old" } },
+    }
+    const effective = { build: { model: "applied/build", variant: "max" } }
+    const file = makeFile({
+      profiles: { glm: source },
+      active: "glm",
+      effective,
+    })
+
+    const name = suggestedDuplicateName("glm", Object.keys(file.profiles))
+    const draft = duplicateProfile(source)
+    const next = commitProfile(file, { name, profile: draft, setActive: false })
+
+    expect(name).toBe("glm copy")
+    expect(next.profiles["glm copy"]).toEqual(source)
+    expect(next.profiles["glm copy"]).not.toBe(source)
+    expect(next.active).toBe("glm")
+    expect(next.effective).toEqual(effective)
+    expect(next.effective).toBe(file.effective)
+
+    // Editing the saved duplicate must not mutate the source profile in `next`.
+    const saved = next.profiles["glm copy"]!
+    saved.heavy.model = "edited/duplicate"
+    saved.placements.build = "rest"
+    saved.specifics.docs = { model: "edited/docs" }
+    expect(next.profiles.glm).toEqual(source)
+    expect(source.heavy.model).toBe("stale/gone-model")
+  })
 })
 
 describe("buildProfile", () => {

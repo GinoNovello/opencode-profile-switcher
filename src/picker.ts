@@ -84,7 +84,7 @@ export function buildPickerOptions(profiles: ProfilesFile): SelectOption<PickerA
   options.push({
     title: "⚙ Configure…",
     value: { kind: "configure" },
-    description: "Edit, rename or delete profiles",
+    description: "Edit, rename, duplicate or delete profiles",
   })
 
   return options

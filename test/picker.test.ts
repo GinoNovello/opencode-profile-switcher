@@ -83,6 +83,7 @@ describe("buildPickerOptions", () => {
     expect(options[1]?.title).toBe("  claude")
     expect(options[2]?.value).toEqual({ kind: "new" })
     expect(options[3]?.value).toEqual({ kind: "configure" })
+    expect(options[3]?.description).toBe("Edit, rename, duplicate or delete profiles")
   })
 
   test("empty file still offers the two actions", () => {

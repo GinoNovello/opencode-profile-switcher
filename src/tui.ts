@@ -15,7 +15,7 @@ import {
   formatAlreadyActiveToast,
   type PickerAction,
 } from "./picker.js"
-import type { ProfilesFile } from "./schema.js"
+import type { Profile, ProfilesFile } from "./schema.js"
 import type { SelectOption } from "./select.js"
 import { switchProfile, type DisposableClient } from "./switch.js"
 import {
@@ -23,6 +23,7 @@ import {
   buildProfile,
   buildSpecificOptions,
   commitProfile,
+  duplicateProfile,
   copyPlacements,
   copySpecifics,
   cycleAgentPlacement,
@@ -33,6 +34,7 @@ import {
   specificAgentNames,
   specificsComplete,
   specificsProgress,
+  suggestedDuplicateName,
   updateProfile,
   validateProfileName,
   type Placements,
@@ -178,16 +180,18 @@ function promptName(
   existing: string[],
   self: string | undefined,
   onValid: (name: string) => void,
+  /** Prefill when creating (e.g. a suggested duplicate name); rename uses `self`. */
+  initial?: string,
 ): void {
   showPrompt(ctx, {
     title: self ? "Rename profile" : "Profile name",
     placeholder: "e.g. glm",
-    value: self,
+    value: initial ?? self,
     onConfirm: (raw) => {
       const check = validateProfileName(raw, existing, self)
       if (!check.ok) {
         toast(ctx, "error", check.error ?? "Invalid name.")
-        promptName(ctx, existing, self, onValid)
+        promptName(ctx, existing, self, onValid, initial)
         return
       }
       onValid(raw.trim())
@@ -240,11 +244,44 @@ function pickOneModel(
  * Pick heavy model (+ optional variant) then rest model. Falls back to free-text
  * prompts when no providers are connected (documented limitation: we cannot
  * enumerate models without a connected provider list).
+ *
+ * When `current` is provided (duplicate flow), offer "Keep current models" first
+ * so stale/disconnected model strings survive if the user leaves them untouched.
  */
 function pickModels(
   ctx: Ctx,
   onDone: (heavyModel: string, restModel: string, heavyVariant?: string) => void,
+  current?: Pick<Profile, "heavy" | "rest">,
 ): void {
+  if (current) {
+    const heavyLabel = current.heavy.variant
+      ? `${current.heavy.model} (${current.heavy.variant})`
+      : current.heavy.model
+    showSelect<"keep" | "change">(ctx, {
+      title: "Heavy & rest models",
+      options: [
+        {
+          title: "Keep current models",
+          value: "keep",
+          description: `heavy: ${heavyLabel} · rest: ${current.rest.model}`,
+        },
+        {
+          title: "Change models…",
+          value: "change",
+          description: "Pick new heavy and rest models",
+        },
+      ],
+      onSelect: (choice) => {
+        if (choice === "keep") {
+          onDone(current.heavy.model, current.rest.model, current.heavy.variant)
+        } else {
+          pickModels(ctx, onDone)
+        }
+      },
+    })
+    return
+  }
+
   const list = providers(ctx)
 
   if (list.length === 0) {
@@ -472,7 +509,11 @@ function runNewProfileWizard(ctx: Ctx, file: ProfilesFile): void {
 
 // --- configure menu ---------------------------------------------------------
 
-type ConfigAction = { kind: "edit" } | { kind: "rename" } | { kind: "delete" }
+type ConfigAction =
+  | { kind: "edit" }
+  | { kind: "rename" }
+  | { kind: "duplicate" }
+  | { kind: "delete" }
 
 /** Persist a configure edit and re-apply live if it changed the active profile. */
 async function saveConfigEdit(ctx: Ctx, next: ProfilesFile, affectsActive: boolean): Promise<void> {
@@ -498,6 +539,11 @@ function openConfigureMenu(ctx: Ctx, file: ProfilesFile): void {
       description: "Review a profile's placements and models",
     },
     { title: "Rename profile…", value: { kind: "rename" } },
+    {
+      title: "Duplicate profile…",
+      value: { kind: "duplicate" },
+      description: "Duplicate a profile into a new inactive one",
+    },
     { title: "Delete profile…", value: { kind: "delete" } },
   ]
 
@@ -531,6 +577,49 @@ function openConfigureMenu(ctx: Ctx, file: ProfilesFile): void {
               const next = renameProfile(file, name, renamed)
               void saveConfigEdit(ctx, next, false)
             })
+          })
+          break
+        case "duplicate":
+          pickProfile(ctx, file, "Duplicate which profile?", (sourceName) => {
+            const source = file.profiles[sourceName]
+            if (!source) return
+            // Full independent draft: heavy/rest/variants/placements/specifics
+            // (including stale model strings) are prefilled. Cancel at any
+            // dialog writes nothing. Save commits inactive and leaves
+            // active/effective untouched.
+            const draft = duplicateProfile(source)
+            const existing = Object.keys(file.profiles)
+            const suggested = suggestedDuplicateName(sourceName, existing)
+            promptName(ctx, existing, undefined, (name) => {
+              void editPlacements(
+                ctx,
+                copyPlacements(draft),
+                copySpecifics(draft),
+                (placements, specifics) => {
+                  pickModels(
+                    ctx,
+                    (heavy, rest, variant) => {
+                      configureSpecifics(ctx, placements, specifics, (finalSpecifics) => {
+                        const profile = buildProfile(
+                          heavy,
+                          rest,
+                          placements,
+                          variant,
+                          finalSpecifics,
+                        )
+                        const next = commitProfile(file, {
+                          name,
+                          profile,
+                          setActive: false,
+                        })
+                        void saveConfigEdit(ctx, next, false)
+                      })
+                    },
+                    { heavy: draft.heavy, rest: draft.rest },
+                  )
+                },
+              )
+            }, suggested)
           })
           break
         case "delete":

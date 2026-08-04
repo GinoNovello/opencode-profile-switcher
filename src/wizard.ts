@@ -49,6 +49,23 @@ export function copySpecifics(profile: Profile): Specifics {
   return specifics
 }
 
+/**
+ * Full independent duplicate of a profile. Preserves heavy/rest models and
+ * variants, placements (including exclusions and specific designations), and
+ * specific slots exactly — including stale model/variant strings the connected
+ * provider list may no longer list. Mutating the result never touches the source.
+ */
+export function duplicateProfile(profile: Profile): Profile {
+  const heavy: Profile["heavy"] = { model: profile.heavy.model }
+  if (profile.heavy.variant !== undefined) heavy.variant = profile.heavy.variant
+  return {
+    heavy,
+    rest: { model: profile.rest.model },
+    placements: copyPlacements(profile),
+    specifics: copySpecifics(profile),
+  }
+}
+
 /** Resolve an agent's placement, defaulting an absent agent to the `rest` tier. */
 export function placementOf(placements: Placements, name: string): Placement {
   return placements[name] ?? "rest"
@@ -226,6 +243,19 @@ export function validateProfileName(
     return { ok: false, error: `A profile named "${name}" already exists.` }
   }
   return { ok: true }
+}
+
+/**
+ * Suggest a unique name for a duplicated profile: `"<source> copy"`, then
+ * `"<source> copy 2"`, `"<source> copy 3"`, … skipping any names already in
+ * `existing`.
+ */
+export function suggestedDuplicateName(source: string, existing: readonly string[]): string {
+  const base = `${source} copy`
+  if (!existing.includes(base)) return base
+  let n = 2
+  while (existing.includes(`${base} ${n}`)) n++
+  return `${base} ${n}`
 }
 
 /**
