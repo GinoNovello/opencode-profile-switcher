@@ -63,6 +63,8 @@ Single-context: `CONTEXT.md` en la raíz + `docs/adr/` (se crean lazy vía `/dom
 
 After finishing the implementation of any issue and **before** marking it closed/completed, Orca must orchestrate two reviews in parallel using the skill `@.agents/skills/code-review/SKILL.md`. Both workers must review the complete finished implementation:
 
+Launch review workers through Orca CLI. Before dispatching them, load the `orca-workflow` and `orca-cli` skills and follow their current command guidance; do not invoke reviewer CLIs directly from the coordinator shell.
+
 - OpenCode: use model `zai-coding-plan/glm-5.2` with variant `max`. The CLI invocation must include `opencode run --model zai-coding-plan/glm-5.2 --variant max`.
 - Claude: use model `claude-opus-5` with effort `medium`. Claude calls this setting effort, not variant; the CLI invocation must include `claude --model claude-opus-5 --effort medium`.
 
