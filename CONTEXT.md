@@ -39,3 +39,7 @@ _Avoid_: setup manual, instalador
 **Switch en vivo**:
 Cambio de perfil sin reiniciar el proceso de opencode: persistir el perfil activo + `client.instance.dispose()` → la instancia se re-bootstrapea con la config nueva y las sesiones sobreviven.
 _Avoid_: hot-reload, reinicio automático
+
+**Indicador de perfil**:
+El widget persistente, informativo y no interactivo que muestra a la derecha del prompt (en home y en sesión) el perfil global activo, en texto muted con formato `nombre · modelo-corto-heavy` (p.ej. `performance · glm-5.2`). Representa el perfil activo global, no por sesión. Vuelve a leer `profiles.json` — y por ende se actualiza sin reiniciar — al boot, en cada resize del terminal y cuando llega el evento `server.instance.disposed` (que dispara todo switch en vivo). En terminal angosta colapsa a solo el nombre; si el heavy del perfil está ausente o es inválido, muestra solo el nombre; sin perfil activo no renderiza nada. La lógica de formato vive en `src/indicator.ts` (pura y testeable); `tui.ts` solo la conecta a los slots `home_prompt_right` y `session_prompt_right` vía `api.slots.register` y a una señal reactiva de Solid.
+_Avoid_: badge, status bar, banner, breadcrumb

@@ -41,6 +41,12 @@ function harness(profilesPath: string, agentNames: string[]) {
         return {}
       },
     },
+    // Profile indicator deps (#24) — inert stubs; this test targets the
+    // placement editor, not the indicator.
+    slots: { register: () => "id" },
+    renderer: { width: 120, on: () => {}, off: () => {} },
+    event: { on: () => () => {} },
+    lifecycle: { onDispose: () => () => {} },
     state: { provider: [] },
     client: {
       app: {

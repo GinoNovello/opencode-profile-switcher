@@ -1,6 +1,10 @@
-import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi, TuiPluginModule, TuiSlotContext } from "@opencode-ai/plugin/tui"
+import type { JSX } from "@opentui/solid"
+import { jsx } from "@opentui/solid/jsx-runtime"
+import { createSignal } from "solid-js"
 import { enumerateAgents, type AgentListerClient } from "./agents.js"
 import { readProfiles, writeProfiles } from "./config.js"
+import { formatProfileIndicator } from "./indicator.js"
 import {
   buildModelOptions,
   buildVariantOptions,
@@ -701,8 +705,69 @@ function openProfileMenu(ctx: Ctx): void {
   })
 }
 
+/**
+ * Register the persistent profile indicator (`home_prompt_right` +
+ * `session_prompt_right` slots) — ticket #24.
+ *
+ * The indicator shows `name · shortHeavyModel` in muted text to the right of
+ * the prompt on both home and session screens. All formatting decisions live
+ * in the pure `indicator.ts`; here we only:
+ *   - hold the current label in a Solid signal (so the slot re-renders on
+ *     change — opentui/solid runs each slot renderer inside a Solid memo, so
+ *     reading the signal during render is enough to subscribe),
+ *   - refresh that label on init, on terminal resize (drives the
+ *     narrow/full collapse), and whenever a live switch lands (opencode emits
+ *     `server.instance.disposed` after `instance.dispose()`, which is how
+ *     `switchProfile` applies a new profile without restarting).
+ *
+ * The slot renderer returns `null` when there is no label, which opentui/solid
+ * treats as "no output" (falls back to empty) — so with no active profile the
+ * indicator renders nothing at all.
+ */
+function registerProfileIndicator(api: TuiPluginApi, path: string): void {
+  const [label, setLabel] = createSignal<string | null>(null)
+
+  const refresh = (): void => {
+    const read = readProfiles(path)
+    const active = read.status === "ok" ? read.profiles.active : ""
+    const profile = active ? read.profiles.profiles[active] : undefined
+    setLabel(formatProfileIndicator({ active, profile, width: api.renderer.width }))
+  }
+
+  const onResize = (): void => refresh()
+  api.renderer.on("resize", onResize)
+  const offDisposed = api.event.on("server.instance.disposed", () => refresh())
+
+  api.lifecycle.onDispose(() => {
+    api.renderer.off("resize", onResize)
+    offDisposed()
+  })
+
+  // Initial paint. Reads `profiles.json`; a missing/corrupt file yields no
+  // active profile, so the indicator stays hidden until a profile is applied.
+  refresh()
+
+  const render = (slotCtx: Readonly<TuiSlotContext>): JSX.Element => {
+    const text = label()
+    if (text === null) return null
+    return jsx("span", {
+      style: { foreground: slotCtx.theme.current.textMuted },
+      children: text,
+    })
+  }
+
+  api.slots.register({
+    slots: {
+      home_prompt_right: (slotCtx: Readonly<TuiSlotContext>) => render(slotCtx),
+      session_prompt_right: (slotCtx: Readonly<TuiSlotContext>) => render(slotCtx),
+    },
+  })
+}
+
 export const tui: TuiPlugin = async (api) => {
   const ctx: Ctx = { api, path: defaultProfilesPath() }
+
+  registerProfileIndicator(api, ctx.path)
 
   api.keymap.registerLayer({
     commands: [

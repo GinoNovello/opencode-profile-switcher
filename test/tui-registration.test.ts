@@ -18,6 +18,11 @@ test("tui(api) registers a /profile slash command", async () => {
   const fakeApi = {
     keymap: { registerLayer: (layer: { commands?: Array<{ slashName?: string }> }) => layers.push(layer) },
     ui: { toast() {}, dialog: { replace() {}, clear() {} } },
+    // Profile indicator deps (#24) — inert stubs; this test targets /profile.
+    slots: { register: () => "id" },
+    renderer: { width: 120, on: () => {}, off: () => {} },
+    event: { on: () => () => {} },
+    lifecycle: { onDispose: () => () => {} },
     state: { provider: [] },
     client: {},
   }
