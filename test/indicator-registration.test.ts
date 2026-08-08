@@ -1,30 +1,30 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { testRender } from "@opentui/solid"
+import { jsx } from "@opentui/solid/jsx-runtime"
+import tuiModule from "../src/tui.js"
 import type { ProfilesFile } from "../src/schema.js"
 
 /**
- * The opentui/solid `jsx` factory throws "No renderer found" when called
- * outside a real render context (verified via probe). To exercise the slot
- * renderer headlessly we mock `@opentui/solid/jsx-runtime` so every element the
- * renderer builds is recorded for assertion, then dynamic-import the tui module
- * AFTER the mock is registered so it picks up the fake factory.
+ * These tests mount the indicator slot with opentui's headless test renderer,
+ * under a real `box` parent — the same way opencode hosts the prompt-right
+ * slot.
+ *
+ * They used to mock `@opentui/solid/jsx-runtime` and assert only the *shape*
+ * of the element the slot built. That seam was too shallow: returning a bare
+ * `span` (a text node, illegal as a direct child of a box) satisfied every
+ * assertion and still took down the whole TUI at startup with "Orphan text
+ * error". Only a real mount runs opentui's parent checks, so the mock is gone.
  */
-const built: Array<{ type: string; children: unknown; foreground: unknown }> = []
-await mock.module("@opentui/solid/jsx-runtime", () => ({
-  jsx: (type: string, props: Record<string, unknown>) => {
-    const style = props.style as { foreground?: unknown } | undefined
-    const entry = { type, children: props.children, foreground: style?.foreground }
-    built.push(entry)
-    return entry as unknown
-  },
-  jsxs: () => ({}),
-  jsxDEV: () => ({}),
-  Fragment: () => ({}),
-}))
 
-const { default: tuiModule } = await import("../src/tui.js")
+const TMP = join(tmpdir(), `ps-indicator-${process.pid}-${Date.now()}`)
+const FILE = join(TMP, "profiles.json")
+
+function writeProfilesFile(file: ProfilesFile): void {
+  writeFileSync(FILE, `${JSON.stringify(file, null, 2)}\n`, "utf8")
+}
 
 // Re-used fake TUI api. Only the pieces registerProfileIndicator + the keymap
 // registration touch are implemented; dialog/toast are inert.
@@ -76,20 +76,45 @@ function fakeApi(width = 120): {
   return { api, registered, handlers }
 }
 
-const TMP = join(tmpdir(), `ps-indicator-${process.pid}-${Date.now()}`)
-const FILE = join(TMP, "profiles.json")
+type SlotRenderer = (ctx: unknown) => unknown
 
-function writeProfilesFile(file: ProfilesFile): void {
-  writeFileSync(FILE, `${JSON.stringify(file, null, 2)}\n`, "utf8")
+function slotRenderers(plugin: unknown): Record<string, SlotRenderer> {
+  return (plugin as { slots: Record<string, SlotRenderer> }).slots
 }
 
-function slotRenderers(plugin: unknown): Record<string, (ctx: unknown) => unknown> {
-  return (plugin as { slots: Record<string, (ctx: unknown) => unknown> }).slots
+const MUTED = "#888888"
+const HOME_CTX = { theme: { current: { textMuted: MUTED } } }
+
+const PERFORMANCE: ProfilesFile = {
+  profiles: {
+    performance: {
+      heavy: { model: "zai/glm-5.2" },
+      rest: { model: "zai/glm-4" },
+      placements: {},
+      specifics: {},
+    },
+  },
+  active: "performance",
+  effective: {},
+}
+
+/** Mount one slot renderer under a `box`, as opencode does, and paint a frame. */
+async function mount(slot: SlotRenderer, slotCtx: unknown = HOME_CTX) {
+  const setup = await testRender(() => jsx("box", { children: slot(slotCtx) as never }) as never, {
+    width: 60,
+    height: 3,
+  })
+  await setup.renderOnce()
+  return setup
+}
+
+async function frameOf(slot: SlotRenderer, slotCtx?: unknown): Promise<string> {
+  const { captureCharFrame } = await mount(slot, slotCtx)
+  return captureCharFrame()
 }
 
 describe("profile indicator slot registration", () => {
   beforeEach(() => {
-    built.length = 0
     mkdirSync(TMP, { recursive: true })
     process.env.OPENCODE_PROFILES_PATH = FILE
   })
@@ -119,31 +144,31 @@ describe("profile indicator slot registration", () => {
     expect(typeof handlers["server.instance.disposed"]).toBe("function")
   })
 
-  test("renders a muted span with `name · shortHeavyModel` for an active profile", async () => {
-    writeProfilesFile({
-      profiles: {
-        performance: {
-          heavy: { model: "zai/glm-5.2" },
-          rest: { model: "zai/glm-4" },
-          placements: {},
-          specifics: {},
-        },
-      },
-      active: "performance",
-      effective: {},
-    })
+  test("renders `name · shortHeavyModel` under a box without an orphan-text crash", async () => {
+    // Regression: a `span` here is an orphan text node under the prompt box and
+    // crashed the TUI ("Orphan text error: ... must have a <text> as a parent").
+    // Mounting for real is what catches it.
+    writeProfilesFile(PERFORMANCE)
     const { api, registered } = fakeApi(120)
-    const textMuted = { r: 100, g: 100, b: 100, a: 255 }
 
     await tuiModule.tui(api as never, undefined as never, undefined as never)
-    const slots = slotRenderers(registered.value)
-    const out = slots.home_prompt_right({ theme: { current: { textMuted } } })
 
-    expect(built).toHaveLength(1)
-    expect(built[0]?.type).toBe("span")
-    expect(built[0]?.children).toBe("performance · glm-5.2")
-    expect(built[0]?.foreground).toBe(textMuted)
-    expect(out).toBe(built[0])
+    expect(await frameOf(slotRenderers(registered.value).home_prompt_right)).toContain("performance · glm-5.2")
+  })
+
+  test("paints the indicator in the theme's muted colour", async () => {
+    writeProfilesFile(PERFORMANCE)
+    const { api, registered } = fakeApi(120)
+
+    await tuiModule.tui(api as never, undefined as never, undefined as never)
+    const { captureSpans } = await mount(slotRenderers(registered.value).home_prompt_right)
+
+    const span = captureSpans().lines[0]?.spans.find((s) => s.text.includes("performance"))
+    expect(span).toBeDefined()
+    // #888888, normalised to 0..1 per channel.
+    expect(span?.fg.r).toBeCloseTo(0x88 / 255, 2)
+    expect(span?.fg.g).toBeCloseTo(0x88 / 255, 2)
+    expect(span?.fg.b).toBeCloseTo(0x88 / 255, 2)
   })
 
   test("both slots share the same indicator output", async () => {
@@ -156,46 +181,32 @@ describe("profile indicator slot registration", () => {
 
     await tuiModule.tui(api as never, undefined as never, undefined as never)
     const slots = slotRenderers(registered.value)
-    slots.home_prompt_right({ theme: { current: { textMuted: "c" } } })
-    slots.session_prompt_right({ theme: { current: { textMuted: "c" } }, session_id: "s1" })
 
-    expect(built).toHaveLength(2)
-    expect(built[0]?.children).toBe("fast · glm-4")
-    expect(built[1]?.children).toBe("fast · glm-4")
+    expect(await frameOf(slots.home_prompt_right)).toContain("fast · glm-4")
+    expect(await frameOf(slots.session_prompt_right, { ...HOME_CTX, session_id: "s1" })).toContain("fast · glm-4")
   })
 
-  test("renders nothing (null) when there is no active profile", async () => {
+  test("renders nothing when there is no active profile", async () => {
     writeProfilesFile({ profiles: {}, active: "", effective: {} })
     const { api, registered } = fakeApi(120)
 
     await tuiModule.tui(api as never, undefined as never, undefined as never)
     const slots = slotRenderers(registered.value)
-    const out = slots.home_prompt_right({ theme: { current: { textMuted: "c" } } })
 
-    expect(out).toBeNull()
-    expect(built).toHaveLength(0)
+    expect(slots.home_prompt_right(HOME_CTX)).toBeNull()
+    // …and mounting that empty slot must not crash either.
+    expect((await frameOf(slots.home_prompt_right)).trim()).toBe("")
   })
 
   test("collapses to just the name on a narrow terminal", async () => {
-    writeProfilesFile({
-      profiles: {
-        performance: {
-          heavy: { model: "zai/glm-5.2" },
-          rest: { model: "zai/glm-4" },
-          placements: {},
-          specifics: {},
-        },
-      },
-      active: "performance",
-      effective: {},
-    })
+    writeProfilesFile(PERFORMANCE)
     const { api, registered } = fakeApi(40)
 
     await tuiModule.tui(api as never, undefined as never, undefined as never)
-    const slots = slotRenderers(registered.value)
-    slots.home_prompt_right({ theme: { current: { textMuted: "c" } } })
+    const frame = await frameOf(slotRenderers(registered.value).home_prompt_right)
 
-    expect(built[0]?.children).toBe("performance")
+    expect(frame).toContain("performance")
+    expect(frame).not.toContain("glm-5.2")
   })
 
   test("updates immediately when server.instance.disposed fires", async () => {
@@ -205,26 +216,14 @@ describe("profile indicator slot registration", () => {
 
     await tuiModule.tui(api as never, undefined as never, undefined as never)
     const slots = slotRenderers(registered.value)
-    expect(slots.home_prompt_right({ theme: { current: { textMuted: "c" } } })).toBeNull()
+    expect(slots.home_prompt_right(HOME_CTX)).toBeNull()
 
     // A live switch persists a new active profile and disposes the instance.
-    writeProfilesFile({
-      profiles: {
-        performance: {
-          heavy: { model: "zai/glm-5.2" },
-          rest: { model: "zai/glm-4" },
-          placements: {},
-          specifics: {},
-        },
-      },
-      active: "performance",
-      effective: {},
-    })
+    writeProfilesFile(PERFORMANCE)
     handlers["server.instance.disposed"]?.({ type: "server.instance.disposed", properties: { directory: "" } })
 
     // No re-registration: the same renderer now reflects the new profile.
-    slots.home_prompt_right({ theme: { current: { textMuted: "c" } } })
-    expect(built[built.length - 1]?.children).toBe("performance · glm-5.2")
+    expect(await frameOf(slots.home_prompt_right)).toContain("performance · glm-5.2")
   })
 
   test("does not register the slash command twice / still registers keymap", async () => {

@@ -747,11 +747,16 @@ function registerProfileIndicator(api: TuiPluginApi, path: string): void {
   // active profile, so the indicator stays hidden until a profile is applied.
   refresh()
 
+  // The slot is mounted into a `box`, so the element we return must be a
+  // renderable in its own right. A bare `span` is a text *node*: opentui/solid
+  // rejects it with "Orphan text error: ... must have a <text> as a parent"
+  // and crashes the TUI. `text` is the renderable that carries text under a
+  // box, so the indicator is emitted as `text` directly.
   const render = (slotCtx: Readonly<TuiSlotContext>): JSX.Element => {
     const text = label()
     if (text === null) return null
-    return jsx("span", {
-      style: { foreground: slotCtx.theme.current.textMuted },
+    return jsx("text", {
+      style: { fg: slotCtx.theme.current.textMuted },
       children: text,
     })
   }
