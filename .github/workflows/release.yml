@@ -2,7 +2,18 @@ name: release
 
 # Every push to main runs typecheck + tests. Publishing only happens when this
 # workflow is started explicitly with workflow_dispatch; that run bumps the
-# patch version, tags it, pushes the bump, and publishes it to npm.
+# version, tags it, pushes the bump, and publishes it to npm.
+#
+# Two channels, chosen with the `channel` input:
+#
+#   latest — a patch bump (0.1.7 -> 0.1.8) published to the `latest` dist-tag.
+#            This is what users installing the plugin normally get.
+#   next   — a prerelease bump (0.1.7 -> 0.1.8-next.0) published to the `next`
+#            dist-tag only. `latest` keeps pointing at the last stable release,
+#            so normal installs are untouched. Use it to get a build onto npm
+#            for runtime verification: opencode only loads the `./tui` export
+#            from a published package, so the TUI half of this plugin cannot be
+#            exercised locally. Install it with `@next` to test.
 #
 # Setup required once: add a repo secret NPM_TOKEN (npm > Access Tokens >
 # Automation token). Without it, this workflow still runs as CI (typecheck +
@@ -12,6 +23,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "npm dist-tag to publish to"
+        type: choice
+        options: [latest, next]
+        default: latest
 
 concurrency:
   group: release
@@ -50,12 +67,24 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && env.NPM_TOKEN != '' }}
         env:
           NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
         run: |
+          set -euo pipefail
           # `bun install` can rewrite bun.lock; discard that drift so the tree is
           # clean and `npm version` (which refuses a dirty tree) can run.
           git checkout -- bun.lock 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version patch -m "chore(release): v%s [skip ci]"
-          git push --follow-tags
-          npm publish --access public
+
+          if [ "$CHANNEL" = "next" ]; then
+            # 0.1.7 -> 0.1.8-next.0, and a second run -> 0.1.8-next.1.
+            npm version prerelease --preid next -m "chore(release): v%s [skip ci]"
+            git push --follow-tags
+            # --tag next leaves the `latest` dist-tag pointing at the last
+            # stable release, so `npm i opencode-profile-switcher` is unaffected.
+            npm publish --access public --tag next
+          else
+            npm version patch -m "chore(release): v%s [skip ci]"
+            git push --follow-tags
+            npm publish --access public
+          fi
