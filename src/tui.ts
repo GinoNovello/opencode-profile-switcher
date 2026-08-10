@@ -2,7 +2,7 @@ import type { TuiPlugin, TuiPluginApi, TuiPluginModule, TuiSlotContext } from "@
 import type { JSX } from "@opentui/solid"
 import { jsx } from "@opentui/solid/jsx-runtime"
 import { createSignal } from "solid-js"
-import { enumerateAgents, type AgentListerClient } from "./agents.js"
+import { refreshAgents, type AgentRefreshClient } from "./agents.js"
 import { readProfiles, writeProfiles } from "./config.js"
 import { formatProfileIndicator } from "./indicator.js"
 import {
@@ -344,7 +344,7 @@ async function editPlacements(
   initialSpecifics: Specifics,
   onDone: (placements: Placements, specifics: Specifics) => void,
 ): Promise<void> {
-  const agents = await enumerateAgents(ctx.api.client as unknown as AgentListerClient)
+  const agents = await refreshAgents(ctx.api.client as unknown as AgentRefreshClient)
 
   if (agents.length === 0) {
     toast(ctx, "warning", "Could not enumerate agents — keeping the current placements.")
@@ -450,7 +450,7 @@ function pickProfile(
 
 /** First-run wizard: default placements → review → name → models. */
 async function runFirstRunWizard(ctx: Ctx): Promise<void> {
-  const agents = await enumerateAgents(ctx.api.client as unknown as AgentListerClient)
+  const agents = await refreshAgents(ctx.api.client as unknown as AgentRefreshClient)
   const initial = defaultPlacements(agents)
 
   const toDetails = (placements: Placements, specifics: Specifics) => {

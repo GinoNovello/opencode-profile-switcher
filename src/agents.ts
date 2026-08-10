@@ -82,3 +82,36 @@ export async function enumerateAgents(client: AgentListerClient): Promise<AgentI
     return []
   }
 }
+
+/**
+ * A client that can both list agents and re-bootstrap the instance they were
+ * enumerated from. The real opencode SDK client satisfies this.
+ */
+export interface AgentRefreshClient extends AgentListerClient {
+  instance: {
+    dispose: (options?: unknown) => Promise<unknown>
+  }
+}
+
+/**
+ * Like `enumerateAgents`, but first invalidates opencode's agent list.
+ *
+ * opencode builds the `GET /agent` list once per instance, at bootstrap. An
+ * agent markdown file created while opencode is running never invalidates it,
+ * so a plain `enumerateAgents` keeps returning the pre-existing set and the
+ * wizard silently omits the agent the user just created. Waiting does not help;
+ * `instance.dispose()` is the only invalidation opencode exposes (it is the
+ * same re-bootstrap the live switch relies on — see `switchProfile`).
+ *
+ * Any wizard flow that shows the user a list of agents must use this, not
+ * `enumerateAgents`. Never throws: a failed dispose falls through to the
+ * possibly-stale list, which still beats showing nothing.
+ */
+export async function refreshAgents(client: AgentRefreshClient): Promise<AgentInfo[]> {
+  try {
+    await client.instance.dispose()
+  } catch {
+    // A stale agent list is a better outcome than an empty one.
+  }
+  return enumerateAgents(client)
+}
