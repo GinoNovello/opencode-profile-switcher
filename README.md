@@ -14,8 +14,11 @@ Built for people who mix providers (e.g. xAI + GLM) and otherwise have to change
 > ([raw](https://raw.githubusercontent.com/GinoNovello/opencode-profile-switcher/main/docs/README.opencode.md)).
 > It has everything needed to install and verify this plugin from a single Markdown file.
 
-Requires **opencode >= 1.18.11**. Install the plugin globally with opencode's
-plugin installer:
+Requires **opencode 1.x (>= 1.18.11)**. It does not work with opencode 2.0
+yet: 2.0 changed the plugin API, and support will ship as a separate package
+(tracked in [#36](https://github.com/GinoNovello/opencode-profile-switcher/issues/36)).
+
+Install the plugin globally with opencode's plugin installer:
 
 ```sh
 opencode plugin opencode-profile-switcher --global
@@ -173,7 +176,8 @@ bun test
 bun run test:smoke
 ```
 
-The smoke test requires `opencode` on `PATH`. It builds and loads the shipped
+The smoke test requires opencode 1.x on `PATH` (opencode 2.0 does not serve the
+`/config` endpoint it checks). It builds and loads the shipped
 server entrypoint in an isolated XDG sandbox, switches between fake profiles
 (including an exclusion that preserves a prior effective model+variant),
 restarts the process, and verifies `GET /config`, `GET /agent`, process

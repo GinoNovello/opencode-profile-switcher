@@ -12,7 +12,7 @@ hand-editing config or restarting for each switch.
 | | |
 | --- | --- |
 | **Package** | `opencode-profile-switcher` (npm) |
-| **Requires** | [opencode](https://opencode.ai) **>= 1.18.11** |
+| **Requires** | [opencode](https://opencode.ai) **1.x, >= 1.18.11** (not compatible with opencode 2.0 yet) |
 | **Repo** | https://github.com/GinoNovello/opencode-profile-switcher |
 | **License** | MIT |
 
