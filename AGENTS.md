@@ -65,7 +65,7 @@ After finishing the implementation of any issue and **before** marking it closed
 
 Launch review workers through Orca CLI. Before dispatching them, load the `orca-workflow` and `orca-cli` skills and follow their current command guidance; do not invoke reviewer CLIs directly from the coordinator shell.
 
-- OpenCode: use model `zai-coding-plan/glm-5.2` with variant `max`. The CLI invocation must include `opencode run --model zai-coding-plan/glm-5.2 --variant max`.
+- OpenCode: use model `zai-coding-plan/glm-5.2` with variant `max`. On opencode 2.x the variant is part of the model string (there is no `--variant` flag), so the CLI invocation must include `opencode run --model 'zai-coding-plan/glm-5.2#max'`. Verify it in the session (`opencode api session.get --param sessionID=<id>` shows `"variant":"max"`); the model's own self-report is not reliable.
 - Claude: use model `claude-opus-5` with effort `medium`. Claude calls this setting effort, not variant; the CLI invocation must include `claude --model claude-opus-5 --effort medium`.
 
 Do not rely on either agent's default model or effort. Verify the effective model and variant/effort in each worker session before accepting its report. Resolve all blocking findings before closing the issue.
