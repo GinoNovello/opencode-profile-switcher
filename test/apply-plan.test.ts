@@ -1,27 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { planApply } from "../src/core/apply-plan.js"
-import type { ProfilesFile } from "../src/core/schema.js"
-
-function makeProfiles(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
-  return {
-    profiles: {
-      glm: {
-        heavy: { model: "zai/glm-5", variant: "max" },
-        rest: { model: "zai/glm-4" },
-        placements: {
-          build: "heavy",
-          explore: "rest",
-          vision: "excluded",
-          docs: "specific",
-        },
-        specifics: { docs: { model: "anthropic/claude-docs", variant: "high" } },
-      },
-    },
-    active: "glm",
-    effective: {},
-    ...overrides,
-  }
-}
+import { makeProfiles } from "./helpers/profiles.js"
 
 describe("planApply", () => {
   test("no active profile skips without touching effective", () => {
@@ -66,6 +45,13 @@ describe("planApply", () => {
         slot: { model: "zai/glm-5", variant: "max" },
         unassigned: false,
       },
+      {
+        name: "plan",
+        action: "set",
+        placement: "heavy",
+        slot: { model: "zai/glm-5", variant: "max" },
+        unassigned: false,
+      },
       { name: "explore", action: "set", placement: "rest", slot: { model: "zai/glm-4" }, unassigned: false },
       { name: "vision", action: "keep", placement: "excluded" },
       {
@@ -76,7 +62,7 @@ describe("planApply", () => {
         unassigned: false,
       },
     ])
-    expect(plan.changedAgents).toEqual(["build", "explore", "docs"])
+    expect(plan.changedAgents).toEqual(["build", "plan", "explore", "docs"])
   })
 
   test("considers runtime agents, then placements, then configured agents", () => {
@@ -85,6 +71,7 @@ describe("planApply", () => {
     expect(plan.agents.map((agent) => agent.name)).toEqual([
       "newbie",
       "build",
+      "plan",
       "explore",
       "vision",
       "docs",
@@ -140,6 +127,7 @@ describe("planApply", () => {
     const first = planApply(makeProfiles())
     expect(first.effective).toEqual({
       build: { model: "zai/glm-5", variant: "max" },
+      plan: { model: "zai/glm-5", variant: "max" },
       explore: { model: "zai/glm-4" },
       docs: { model: "anthropic/claude-docs", variant: "high" },
     })

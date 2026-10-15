@@ -1,28 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { applyProfile, type MutableConfig } from "../src/v1/apply.js"
 import type { ProfilesFile } from "../src/core/schema.js"
-
-function makeProfiles(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
-  return {
-    profiles: {
-      glm: {
-        heavy: { model: "zai/glm-5", variant: "max" },
-        rest: { model: "zai/glm-4" },
-        placements: {
-          build: "heavy",
-          plan: "heavy",
-          explore: "rest",
-          vision: "excluded",
-          docs: "specific",
-        },
-        specifics: { docs: { model: "anthropic/claude-docs", variant: "high" } },
-      },
-    },
-    active: "glm",
-    effective: {},
-    ...overrides,
-  }
-}
+import { makeProfiles } from "./helpers/profiles.js"
 
 describe("applyProfile", () => {
   test("sets global model=heavy and small_model=rest", () => {
