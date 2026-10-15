@@ -1,4 +1,9 @@
-import { planApply } from "../core/apply-plan.js"
+import {
+  planApply,
+  type ApplyPlan,
+  type ApplyPlanSummary,
+  type SkippedApplyPlan,
+} from "../core/apply-plan.js"
 import type { EffectiveSlot, ProfilesFile } from "../core/schema.js"
 
 /**
@@ -33,28 +38,25 @@ export interface ApplyOptions {
   agents?: string[]
 }
 
-export interface ApplyResult {
+/** The plan's report, flattened for callers that only need the outcome. */
+export interface ApplyResult extends ApplyPlanSummary {
   /** Whether a profile was applied. False when there is no usable active profile. */
   applied: boolean
-  /** The active profile name that was consulted. */
-  active: string
   /** Why nothing was applied, when `applied` is false. */
-  reason?: "no-active" | "unknown-active"
-  /** Agents whose model was written. */
-  changedAgents: string[]
-  /**
-   * Agents absent from the active profile's placements that fell back to the
-   * `rest` tier. Surface these to the user (toast) suggesting they run the
-   * wizard to place them explicitly.
-   */
-  unassigned: string[]
-  /**
-   * Full effective map after this apply. Callers that own persistence should
-   * write it when `effectiveChanged` is true (and the on-disk file is valid).
-   */
-  effective: Record<string, EffectiveSlot>
-  /** True when `effective` differs from the input `profiles.effective`. */
-  effectiveChanged: boolean
+  reason?: SkippedApplyPlan["reason"]
+}
+
+/** Strip a plan down to the `ApplyResult` report (no per-agent targets). */
+function toResult(plan: ApplyPlan): ApplyResult {
+  return {
+    applied: plan.applied,
+    active: plan.active,
+    ...(plan.applied ? {} : { reason: plan.reason }),
+    changedAgents: plan.changedAgents,
+    unassigned: plan.unassigned,
+    effective: plan.effective,
+    effectiveChanged: plan.effectiveChanged,
+  }
 }
 
 /** Write a model (and optional variant) onto an agent config entry. */
@@ -89,17 +91,7 @@ export function applyProfile(
     configured: Object.keys(cfg.agent ?? {}),
   })
 
-  if (!plan.applied) {
-    return {
-      applied: false,
-      active: plan.active,
-      reason: plan.reason,
-      changedAgents: plan.changedAgents,
-      unassigned: plan.unassigned,
-      effective: plan.effective,
-      effectiveChanged: plan.effectiveChanged,
-    }
-  }
+  if (!plan.applied) return toResult(plan)
 
   // Global fallbacks: heavy -> model, rest -> small_model.
   cfg.model = plan.defaults.heavy.model
@@ -111,12 +103,5 @@ export function applyProfile(
     applySlot((agentConfig[agent.name] ??= {}), agent.slot)
   }
 
-  return {
-    applied: true,
-    active: plan.active,
-    changedAgents: plan.changedAgents,
-    unassigned: plan.unassigned,
-    effective: plan.effective,
-    effectiveChanged: plan.effectiveChanged,
-  }
+  return toResult(plan)
 }

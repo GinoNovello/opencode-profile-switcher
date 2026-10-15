@@ -26,30 +26,36 @@ export type AgentPlan =
   | { name: string; action: "set"; placement: Placement; slot: EffectiveSlot; unassigned: boolean }
   | { name: string; action: "keep"; placement: "excluded" | "specific" }
 
-interface PlanBase {
+/** The report every plan carries, applied or not. */
+export interface ApplyPlanSummary {
   /** The active profile name that was consulted. */
   active: string
-  /** Agents that receive a slot (the `set` entries of `agents`), in order. */
+  /** Agents whose model is written (the `set` entries of `agents`), in order. */
   changedAgents: string[]
   /**
    * Agents absent from the active profile's placements that fell back to the
-   * `rest` tier.
+   * `rest` tier. Surface these to the user (toast) suggesting they run the
+   * wizard to place them explicitly.
    */
   unassigned: string[]
-  /** Full effective map after applying this plan. */
+  /**
+   * Full effective map after applying this plan. Callers that own persistence
+   * should write it when `effectiveChanged` is true (and the on-disk file is
+   * valid).
+   */
   effective: Record<string, EffectiveSlot>
   /** True when `effective` differs from the input `profiles.effective`. */
   effectiveChanged: boolean
 }
 
 /** Nothing to apply: there is no usable active profile. */
-export interface SkippedApplyPlan extends PlanBase {
+export interface SkippedApplyPlan extends ApplyPlanSummary {
   applied: false
   reason: "no-active" | "unknown-active"
 }
 
 /** The active profile resolved to concrete per-agent and global slots. */
-export interface ReadyApplyPlan extends PlanBase {
+export interface ReadyApplyPlan extends ApplyPlanSummary {
   applied: true
   /**
    * The tier slots for the host's global defaults. In opencode 1.x the global
