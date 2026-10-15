@@ -44,6 +44,10 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:smoke": "bun run build && bun test ./test/live-switch.smoke.ts",
+    "typecheck:v2": "bun run --cwd packages/v2 typecheck",
+    "test:v2": "bun run --cwd packages/v2 test",
+    "build:v2": "bun run --cwd packages/v2 build",
+    "check": "bun run typecheck && bun test && bun run build && bun run typecheck:v2 && bun run test:v2 && bun run build:v2",
     "prepublishOnly": "bun run build"
   },
   "peerDependencies": {
