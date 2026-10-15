@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { emptyProfilesFile, profilesFileSchema } from "../src/schema.js"
+import { emptyProfilesFile, profilesFileSchema } from "../src/core/schema.js"
 
 describe("profilesFileSchema", () => {
   test("parses a fully valid file", () => {

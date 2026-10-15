@@ -1,3 +1,7 @@
+import type { AgentInfo } from "../core/agent.js"
+
+export type { AgentInfo } from "../core/agent.js"
+
 /**
  * Minimal shape of the plugin `client` needed to enumerate agents. Kept loose
  * so callers can pass the real opencode SDK client without a hard type coupling.
@@ -15,17 +19,6 @@ interface RawAgent {
   hidden?: unknown
   /** Legacy field name in the v1 SDK types; wire format uses `native`. */
   builtIn?: unknown
-}
-
-/**
- * An agent's identity plus the two flags the wizard needs to pick a default
- * tier: its `mode` (primary agents default to `heavy`, subagents to `rest`) and
- * whether it is `hidden` (hidden system agents default to `rest`).
- */
-export interface AgentInfo {
-  name: string
-  mode: "primary" | "subagent" | "all"
-  hidden: boolean
 }
 
 function normalizeMode(value: unknown): AgentInfo["mode"] {

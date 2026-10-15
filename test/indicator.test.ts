@@ -4,8 +4,8 @@ import {
   INDICATOR_SEPARATOR,
   NARROW_WIDTH,
   shortModelName,
-} from "../src/indicator.js"
-import type { Profile } from "../src/schema.js"
+} from "../src/core/indicator.js"
+import type { Profile } from "../src/core/schema.js"
 
 const heavyProfile = (model: string): Profile => ({
   heavy: { model },

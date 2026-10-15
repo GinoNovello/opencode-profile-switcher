@@ -1,4 +1,4 @@
-import type { AgentInfo } from "./agents.js"
+import type { AgentInfo } from "./agent.js"
 import type { Placement, Profile, ProfilesFile, SpecificSlot } from "./schema.js"
 import type { SelectOption } from "./select.js"
 

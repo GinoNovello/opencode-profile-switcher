@@ -1,5 +1,5 @@
-import { readProfiles, setActiveProfile } from "./config.js"
-import { defaultProfilesPath } from "./paths.js"
+import { readProfiles, setActiveProfile } from "../core/config.js"
+import { defaultProfilesPath } from "../core/paths.js"
 
 /**
  * Minimal shape of the plugin `client` needed to trigger a live switch. The

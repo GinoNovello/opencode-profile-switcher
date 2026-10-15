@@ -8,8 +8,8 @@ import {
   shortModel,
   specificCount,
   switchResultToast,
-} from "../src/picker.js"
-import type { Profile, ProfilesFile } from "../src/schema.js"
+} from "../src/core/picker.js"
+import type { Profile, ProfilesFile } from "../src/core/schema.js"
 
 const glm: Profile = {
   heavy: { model: "zai/glm-5", variant: "max" },
@@ -103,17 +103,17 @@ describe("switch toasts", () => {
   })
 
   test("switchResultToast: success", () => {
-    const t = switchResultToast("glm", glm, { ok: true, active: "glm", disposed: true })
+    const t = switchResultToast("glm", glm, { ok: true, reloaded: true })
     expect(t.variant).toBe("success")
     expect(t.message).toContain('Profile "glm" active')
   })
   test("switchResultToast: persisted but reload failed -> warning to restart", () => {
-    const t = switchResultToast("glm", glm, { ok: true, active: "glm", disposed: false, error: "boom" })
+    const t = switchResultToast("glm", glm, { ok: true, reloaded: false, error: "boom" })
     expect(t.variant).toBe("warning")
     expect(t.message).toContain("restart opencode")
   })
   test("switchResultToast: hard failure -> error", () => {
-    const t = switchResultToast("glm", glm, { ok: false, disposed: false, error: "unknown profile" })
+    const t = switchResultToast("glm", glm, { ok: false, reloaded: false, error: "unknown profile" })
     expect(t.variant).toBe("error")
     expect(t.message).toContain("unknown profile")
   })

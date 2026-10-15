@@ -21,16 +21,16 @@
   ],
   "exports": {
     ".": {
-      "import": "./dist/server.js",
-      "types": "./dist/server.d.ts"
+      "import": "./dist/v1/server.js",
+      "types": "./dist/v1/server.d.ts"
     },
     "./server": {
-      "import": "./dist/server.js",
-      "types": "./dist/server.d.ts"
+      "import": "./dist/v1/server.js",
+      "types": "./dist/v1/server.d.ts"
     },
     "./tui": {
-      "import": "./dist/tui.js",
-      "types": "./dist/tui.d.ts"
+      "import": "./dist/v1/tui.js",
+      "types": "./dist/v1/tui.d.ts"
     }
   },
   "files": [

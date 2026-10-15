@@ -2,7 +2,7 @@ import { test, expect, afterEach } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import tuiModule from "../src/tui.js"
+import tuiModule from "../src/v1/tui.js"
 
 // Regression (cursor jump): the placement editor re-renders its DialogSelect
 // after every cycle via `dialog.replace`, which mounts a fresh dialog whose

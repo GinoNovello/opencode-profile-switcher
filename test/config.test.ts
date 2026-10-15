@@ -7,9 +7,9 @@ import {
   setActiveProfile,
   writeEffectiveState,
   writeProfiles,
-} from "../src/config.js"
-import { applyProfile, type MutableConfig } from "../src/apply.js"
-import type { ProfilesFile } from "../src/schema.js"
+} from "../src/core/config.js"
+import { applyProfile, type MutableConfig } from "../src/v1/apply.js"
+import type { ProfilesFile } from "../src/core/schema.js"
 
 let dir: string
 let path: string

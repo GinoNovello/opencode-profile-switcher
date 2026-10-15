@@ -1,6 +1,5 @@
 import type { Profile, ProfilesFile } from "./schema.js"
 import type { SelectOption } from "./select.js"
-import type { SwitchResult } from "./switch.js"
 
 /**
  * The two synthetic actions that sit at the bottom of the `/profile` picker,
@@ -100,21 +99,34 @@ export function formatAlreadyActiveToast(name: string): string {
   return `Profile "${name}" is already active`
 }
 
+/**
+ * What the toast needs to know about a profile switch, whatever host ran it.
+ * Each adapter maps its own switch result onto this.
+ */
+export interface SwitchOutcome {
+  /** True when the profile was persisted as active. */
+  ok: boolean
+  /** Whether the host reloaded live so the new profile is already in effect. */
+  reloaded: boolean
+  /** Failure reason, when `ok` is false. */
+  error?: string
+}
+
 export interface SwitchToast {
   variant: "success" | "warning" | "error"
   message: string
 }
 
 /**
- * Map a `switchProfile` result onto a toast. A partial success (persisted but
+ * Map a switch outcome onto a toast. A partial success (persisted but
  * the live reload failed) becomes a warning telling the user to restart; a hard
  * failure becomes an error.
  */
-export function switchResultToast(name: string, profile: Profile, result: SwitchResult): SwitchToast {
+export function switchResultToast(name: string, profile: Profile, result: SwitchOutcome): SwitchToast {
   if (!result.ok) {
     return { variant: "error", message: `Could not switch profile: ${result.error ?? "unknown error"}` }
   }
-  if (!result.disposed) {
+  if (!result.reloaded) {
     return {
       variant: "warning",
       message: `Profile "${name}" saved but live reload failed — restart opencode to apply it.`,
