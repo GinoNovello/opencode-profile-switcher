@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test"
  * Regression loop for the "`/profile` never appears in the `/` autocomplete" bug.
  *
  * Root cause: the plugin is loaded from the user's `opencode.jsonc` `plugin`
- * array as **absolute file paths** (`.../dist/server.js`, `.../dist/tui.js`).
+ * array as **absolute file paths** (`.../dist/v1/server.js`, `.../dist/v1/tui.js`).
  * When opencode loads a plugin whose spec is a path, the loader treats its
  * source as `"file"` and REQUIRES the module's default export to carry a
  * string `id`. Without it, `resolvePluginId` throws
@@ -98,14 +98,14 @@ describe("loading the built plugin from an absolute file path (as the user's ope
   test("the /tui entry survives opencode's file-path loader (registers /profile)", async () => {
     const mod = (await import("../src/v1/tui.js")) as unknown as Record<string, unknown>
     expect(() =>
-      loadAsFilePathPlugin(mod, "/abs/path/to/dist/tui.js", "tui"),
+      loadAsFilePathPlugin(mod, "/abs/path/to/dist/v1/tui.js", "tui"),
     ).not.toThrow()
   })
 
   test("the /server entry survives opencode's file-path loader (applies the profile)", async () => {
     const mod = (await import("../src/v1/server.js")) as unknown as Record<string, unknown>
     expect(() =>
-      loadAsFilePathPlugin(mod, "/abs/path/to/dist/server.js", "server"),
+      loadAsFilePathPlugin(mod, "/abs/path/to/dist/v1/server.js", "server"),
     ).not.toThrow()
   })
 })
