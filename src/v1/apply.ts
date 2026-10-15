@@ -1,4 +1,5 @@
-import type { EffectiveSlot, Profile, ProfilesFile, TierName } from "../core/schema.js"
+import { planApply } from "../core/apply-plan.js"
+import type { EffectiveSlot, ProfilesFile } from "../core/schema.js"
 
 /**
  * The subset of an agent's config we mutate. Structurally compatible with
@@ -56,16 +57,6 @@ export interface ApplyResult {
   effectiveChanged: boolean
 }
 
-/** Resolve the model slot for a tier within a profile. */
-function tierSlot(profile: Profile, tier: TierName): EffectiveSlot {
-  return tier === "heavy" ? profile.heavy : profile.rest
-}
-
-/** Snapshot a complete effective slot (model + optional variant, no extras). */
-function snapshotSlot(slot: EffectiveSlot): EffectiveSlot {
-  return slot.variant ? { model: slot.model, variant: slot.variant } : { model: slot.model }
-}
-
 /** Write a model (and optional variant) onto an agent config entry. */
 function applySlot(target: MutableAgentConfig, slot: EffectiveSlot): void {
   target.model = slot.model
@@ -73,42 +64,17 @@ function applySlot(target: MutableAgentConfig, slot: EffectiveSlot): void {
   else delete target.variant
 }
 
-function slotsEqual(a: EffectiveSlot | undefined, b: EffectiveSlot | undefined): boolean {
-  if (a === b) return true
-  if (!a || !b) return false
-  return a.model === b.model && a.variant === b.variant
-}
-
-function effectiveMapsEqual(
-  a: Record<string, EffectiveSlot>,
-  b: Record<string, EffectiveSlot>,
-): boolean {
-  const keysA = Object.keys(a)
-  const keysB = Object.keys(b)
-  if (keysA.length !== keysB.length) return false
-  for (const key of keysA) {
-    if (!slotsEqual(a[key], b[key])) return false
-  }
-  return true
-}
-
 /**
  * Apply the active profile onto a resolved opencode config, in place.
  *
- * Rules:
+ * The decisions live in `planApply` (host-independent); this is the 1.x
+ * writer for its plan:
  * - `cfg.model` = heavy tier model; `cfg.small_model` = rest tier model.
- * - Each considered agent gets the model of its placement in the active profile.
- * - Agents placed as `specific` receive their direct model/variant from
- *   `profile.specifics` (no tier indirection). A missing/empty slot is skipped
- *   defensively so a hand-edited incomplete file cannot crash the switch.
- * - Agents the profile places as `excluded` restore their last persisted
- *   effective model/variant when the plugin has one; otherwise they are left
- *   completely untouched (original opencode config).
- * - Applying `heavy`, `rest` or `specific` records the chosen complete slot in
- *   the returned `effective` map (variant absent ⇒ cleared, never merged with
- *   a prior profile's variant).
- * - An agent absent from the profile's placements falls back to the `rest` tier
- *   and is reported in `unassigned` (never breaks the switch).
+ * - Every `set` agent gets the planned model/variant, creating its
+ *   `cfg.agent` entry when missing.
+ * - `keep` agents (excluded with no remembered model, incomplete `specific`)
+ *   are left completely untouched.
+ * - Nothing is written when there is no usable active profile.
  *
  * Pure except for the in-place mutation of `cfg`; returns a report for toasts
  * and the next effective map for persistence.
@@ -118,93 +84,39 @@ export function applyProfile(
   profiles: ProfilesFile,
   options: ApplyOptions = {},
 ): ApplyResult {
-  const active = profiles.active
-  const priorEffective = profiles.effective ?? {}
+  const plan = planApply(profiles, {
+    agents: options.agents,
+    configured: Object.keys(cfg.agent ?? {}),
+  })
 
-  if (!active) {
+  if (!plan.applied) {
     return {
       applied: false,
-      active,
-      reason: "no-active",
-      changedAgents: [],
-      unassigned: [],
-      effective: { ...priorEffective },
-      effectiveChanged: false,
-    }
-  }
-  const profile = profiles.profiles[active]
-  if (!profile) {
-    return {
-      applied: false,
-      active,
-      reason: "unknown-active",
-      changedAgents: [],
-      unassigned: [],
-      effective: { ...priorEffective },
-      effectiveChanged: false,
+      active: plan.active,
+      reason: plan.reason,
+      changedAgents: plan.changedAgents,
+      unassigned: plan.unassigned,
+      effective: plan.effective,
+      effectiveChanged: plan.effectiveChanged,
     }
   }
 
   // Global fallbacks: heavy -> model, rest -> small_model.
-  cfg.model = profile.heavy.model
-  cfg.small_model = profile.rest.model
+  cfg.model = plan.defaults.heavy.model
+  cfg.small_model = plan.defaults.rest.model
 
   const agentConfig = (cfg.agent ??= {})
-
-  // Consider the union of: runtime-enumerated agents, the profile's placed
-  // agents, and any agents already present in the config.
-  const names = new Set<string>()
-  for (const name of options.agents ?? []) names.add(name)
-  for (const name of Object.keys(profile.placements)) names.add(name)
-  for (const name of Object.keys(agentConfig)) names.add(name)
-
-  const changedAgents: string[] = []
-  const unassigned: string[] = []
-  const specifics = profile.specifics ?? {}
-  const effective: Record<string, EffectiveSlot> = { ...priorEffective }
-
-  for (const name of names) {
-    const placement = profile.placements[name]
-
-    if (placement === "excluded") {
-      const remembered = priorEffective[name]
-      if (!remembered?.model) continue
-      const slot = snapshotSlot(remembered)
-      const target = (agentConfig[name] ??= {})
-      applySlot(target, slot)
-      effective[name] = slot
-      changedAgents.push(name)
-      continue
-    }
-
-    if (placement === "specific") {
-      const slot = specifics[name]
-      // Defensive: incomplete hand-edited JSON must not throw or half-write.
-      if (!slot?.model) continue
-      const chosen = snapshotSlot(slot)
-      const target = (agentConfig[name] ??= {})
-      applySlot(target, chosen)
-      effective[name] = chosen
-      changedAgents.push(name)
-      continue
-    }
-
-    const tier: TierName = placement ?? "rest"
-    if (!placement) unassigned.push(name)
-
-    const chosen = snapshotSlot(tierSlot(profile, tier))
-    const target = (agentConfig[name] ??= {})
-    applySlot(target, chosen)
-    effective[name] = chosen
-    changedAgents.push(name)
+  for (const agent of plan.agents) {
+    if (agent.action !== "set") continue
+    applySlot((agentConfig[agent.name] ??= {}), agent.slot)
   }
 
   return {
     applied: true,
-    active,
-    changedAgents,
-    unassigned,
-    effective,
-    effectiveChanged: !effectiveMapsEqual(priorEffective, effective),
+    active: plan.active,
+    changedAgents: plan.changedAgents,
+    unassigned: plan.unassigned,
+    effective: plan.effective,
+    effectiveChanged: plan.effectiveChanged,
   }
 }
