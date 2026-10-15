@@ -51,6 +51,8 @@ export class FakeHost {
   listCalls = 0
   modelReloads = 0
   failReload = false
+  /** Agents the host leaves without a model after every pass, whatever wrote one. */
+  dropModel = new Set<string>()
   rpc: RpcCall | undefined
   transformsDisposed = 0
 
@@ -98,6 +100,7 @@ export class FakeHost {
       if (entry.model) agent.model = { ...entry.model }
       agents.set(id, agent)
     }
+    for (const id of this.dropModel) delete agents.get(id)?.model
     this.agents = [...agents.values()].map((agent) => ({ ...agent }))
 
     const modelEditor = {

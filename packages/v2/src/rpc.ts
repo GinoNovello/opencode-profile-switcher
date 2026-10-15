@@ -20,48 +20,81 @@ export interface ModelJson {
   variant: string | null
 }
 
+export type PlacementName = "heavy" | "rest" | "specific" | "excluded"
+
 /** One agent of the location as the profile left it (after the last reload). */
 export interface AgentStatus {
   /** The agent id, which is also its key in `profiles.json` placements. */
   id: string
   /** The agent's placement in the active profile; `null` when it has none. */
-  placement: "heavy" | "rest" | "specific" | "excluded" | null
+  placement: PlacementName | null
   /** The model the profile asked for; `null` when it leaves the agent alone. */
   planned: ModelJson | null
   /**
    * The model the agent ended up with — what a session on this agent should
-   * switch to. Differs from `planned` exactly when the agent is pinned.
+   * switch to. Differs from `planned` when the agent is fixed by config.
    */
   model: ModelJson | null
-  /** The user's config defines this agent's model, so the profile lost (ADR-0003). */
-  pinned: boolean
+  /**
+   * The user's config defines this agent's model, so the profile lost
+   * ("agente fijado por config", ADR-0003).
+   */
+  fixedByConfig: boolean
 }
 
+/**
+ * A slot of the active profile whose model is not `provider/model` (e.g.
+ * `"zai/glm-5#max"`: the variant goes in its own field). Nothing is applied
+ * from it. `agent` is `null` for a tier slot.
+ */
+export interface InvalidSlot {
+  placement: PlacementName
+  agent: string | null
+  model: string
+}
+
+/**
+ * Where the server is with the location's agents:
+ * - `pending` — learning the agent ids and applying the profile (boot or switch).
+ * - `ready`   — applied; `agents`, `fixedByConfig` and `partial` describe it.
+ * - `failed`  — the last pass could not finish (`error` says why). Models may
+ *               be half applied; the next `switch` runs a full pass again.
+ */
+export type Phase = "pending" | "ready" | "failed"
+
 export interface StatusOutput {
-  /**
-   * False until the plugin has learned the location's agent ids and applied
-   * the profile to all of them; `agents`, `pinned` and `partial` are empty
-   * until then.
-   */
+  /** `phase === "ready"`. */
   ready: boolean
+  phase: Phase
   /** Where `profiles.json` lives for this server. */
   path: string
-  /** Names of every profile defined in `profiles.json`. */
+  /** Names of every profile defined in `profiles.json`, read on each call. */
   profiles: string[]
-  /** The active profile, or `null` when none is set. */
+  /**
+   * The profile the server applies, or `null` when none is set. An `active`
+   * edited into the file by hand takes effect on the next switch or restart.
+   */
   active: string | null
   /** Whether the active profile is being applied. */
   applied: boolean
   /** Why nothing is applied, when `applied` is false. */
   reason: "no-active" | "unknown-active" | "invalid-file" | null
-  /** A readable problem with `profiles.json`, if any. */
+  /** A corrupt `profiles.json`, or why the last pass failed. */
   error: string | null
-  /** Some agents of the active profile are pinned by config. */
+  /** Some agents of the active profile are fixed by config. */
   partial: boolean
-  /** Ids of the pinned agents. */
-  pinned: string[]
+  /** Ids of the agents fixed by config. */
+  fixedByConfig: string[]
+  /**
+   * Agents the profile wrote that list no model after the reload — not a
+   * config override, just a model that did not land.
+   */
+  unapplied: string[]
   /** Agents with no placement in the active profile, applied as `rest`. */
   unassigned: string[]
+  /** Slots of the active profile that cannot be applied. */
+  invalidSlots: InvalidSlot[]
+  /** Empty unless `ready`. */
   agents: AgentStatus[]
 }
 
@@ -72,8 +105,10 @@ export interface SwitchInput {
 export interface SwitchedEvent {
   profile: string
   partial: boolean
-  pinned: string[]
+  fixedByConfig: string[]
 }
+
+const strings = { type: "array", items: { type: "string" } } as const
 
 // Nullable fields carry no `type`: the host validates outputs against these
 // schemas, and plain keywords are what every JSON Schema validator agrees on.
@@ -81,15 +116,25 @@ const status = {
   type: "object",
   properties: {
     ready: { type: "boolean" },
+    phase: { type: "string", enum: ["pending", "ready", "failed"] },
     path: { type: "string" },
-    profiles: { type: "array", items: { type: "string" } },
+    profiles: strings,
     active: {},
     applied: { type: "boolean" },
     reason: {},
     error: {},
     partial: { type: "boolean" },
-    pinned: { type: "array", items: { type: "string" } },
-    unassigned: { type: "array", items: { type: "string" } },
+    fixedByConfig: strings,
+    unapplied: strings,
+    unassigned: strings,
+    invalidSlots: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { placement: { type: "string" }, agent: {}, model: { type: "string" } },
+        required: ["placement", "agent", "model"],
+      },
+    },
     agents: {
       type: "array",
       items: {
@@ -99,14 +144,15 @@ const status = {
           placement: {},
           planned: {},
           model: {},
-          pinned: { type: "boolean" },
+          fixedByConfig: { type: "boolean" },
         },
-        required: ["id", "placement", "planned", "model", "pinned"],
+        required: ["id", "placement", "planned", "model", "fixedByConfig"],
       },
     },
   },
   required: [
     "ready",
+    "phase",
     "path",
     "profiles",
     "active",
@@ -114,8 +160,10 @@ const status = {
     "reason",
     "error",
     "partial",
-    "pinned",
+    "fixedByConfig",
+    "unapplied",
     "unassigned",
+    "invalidSlots",
     "agents",
   ],
 } as const
@@ -158,9 +206,9 @@ export const ProfileSwitcherRpc = Rpc.define({
         properties: {
           profile: { type: "string" },
           partial: { type: "boolean" },
-          pinned: { type: "array", items: { type: "string" } },
+          fixedByConfig: strings,
         },
-        required: ["profile", "partial", "pinned"],
+        required: ["profile", "partial", "fixedByConfig"],
       },
     },
   },

@@ -9,14 +9,16 @@ import {
 import { defaultProfilesPath } from "../../../src/core/paths.js"
 import {
   defaultModel,
+  describeInvalidSlot,
   inspectAgents,
+  invalidSlots,
   nextEffective,
   writeAgentModels,
   type AgentEditorLike,
   type Inspection,
   type ListedAgent,
 } from "./apply.js"
-import { ProfileSwitcherRpc, type StatusOutput, type SwitchInput } from "./rpc.js"
+import { ProfileSwitcherRpc, type Phase, type StatusOutput, type SwitchInput } from "./rpc.js"
 
 /** The part of the plugin context the switcher drives. */
 export type HostContext = Pick<Plugin.Context, "agent" | "model" | "rpc">
@@ -74,12 +76,13 @@ function consoleLog(level: LogLevel, message: string): void {
  *   relearned from that reload's list (a second reload only when it found
  *   agents the editor could not see).
  * Every pass is serialized, so a switch never interleaves with the boot pass
- * or another switch.
+ * or another switch. A pass that cannot finish leaves the status `failed`
+ * (never a mix of the old and new profile); the next switch runs a full pass.
  *
- * Pinned agents. After the last reload of a pass the listed agents are
- * compared with the plan: any whose model differs was pinned by the user's
- * config (ADR-0003), which makes the profile partial. Only agents that took
- * the profile's model are recorded in `effective` (ADR-0002).
+ * Agents fixed by config. After the last reload of a pass the listed agents
+ * are compared with the plan: any that lists a different model was fixed by
+ * the user's config (ADR-0003), which makes the profile partial. Only agents
+ * that took the profile's model are recorded in `effective` (ADR-0002).
  */
 export async function setupProfileSwitcher(
   ctx: HostContext,
@@ -95,8 +98,10 @@ export async function setupProfileSwitcher(
   let learned: ReadonlySet<string> = new Set()
   // Ids the transform's editor listed on its last run (undefined: never ran).
   let seen: ReadonlySet<string> | undefined
+  // What the last finished pass left; only meaningful while `phase` is ready.
   let inspection: Inspection | undefined
-  let ready = false
+  let phase: Phase = "pending"
+  let passError: string | null = null
   let disposed = false
   // Settles on the transform's first run (or on cleanup): the boot pass lists
   // the agents only after it, so the list it gets already went through it.
@@ -135,10 +140,16 @@ export async function setupProfileSwitcher(
     return listed.data.map((agent) => ({ id: agent.id, model: agent.model }))
   }
 
-  /** Learned ids the transform did not see, i.e. ones a reload still has to write. */
-  function unseen(listed: readonly ListedAgent[]): boolean {
+  /** Whether the listing has agents the transform did not see, which a reload still has to write. */
+  function hasUnseenAgents(listed: readonly ListedAgent[]): boolean {
     if (!seen) return true
     return listed.some((agent) => !seen!.has(agent.id))
+  }
+
+  function fail(message: string): void {
+    phase = "failed"
+    passError = message
+    inspection = undefined
   }
 
   /**
@@ -148,24 +159,23 @@ export async function setupProfileSwitcher(
    */
   async function settle(listed: ListedAgent[]): Promise<void> {
     learned = new Set(listed.map((agent) => agent.id))
-    if (unseen(listed)) {
+    if (hasUnseenAgents(listed)) {
       await ctx.agent.reload()
       listed = await listAgents()
     }
-    ready = true
+    phase = "ready"
+    passError = null
+    inspection = undefined
+    if (read.status === "invalid") return
 
-    if (read.status === "invalid") {
-      inspection = undefined
-      return
-    }
-    inspection = inspectAgents(read.profiles, listed)
-    if (!inspection) {
-      const plan = planApply(read.profiles)
-      if (!plan.applied && plan.reason === "unknown-active") {
+    const plan = planApply(read.profiles, { agents: listed.map((agent) => agent.id) })
+    if (!plan.applied) {
+      if (plan.reason === "unknown-active") {
         log("warn", `active profile "${plan.active}" is not defined; run the profile-switcher wizard`)
       }
       return
     }
+    inspection = inspectAgents(read.profiles, plan, listed)
 
     const { effective, changed } = nextEffective(read.profiles.effective, inspection.applied)
     if (changed) {
@@ -177,14 +187,28 @@ export async function setupProfileSwitcher(
       }
     }
 
-    const parts = [`profile "${inspection.plan.active}" applied`]
-    if (inspection.plan.unassigned.length > 0) {
-      parts.push(`unassigned agents fell back to rest: ${inspection.plan.unassigned.join(", ")}`)
+    const invalid = invalidSlots(read.profiles)
+    if (invalid.length > 0) {
+      log(
+        "warn",
+        `invalid model, expected provider/model with the variant apart; left untouched: ${invalid
+          .map(describeInvalidSlot)
+          .join(", ")}`,
+      )
     }
-    if (inspection.pinned.length > 0) {
-      parts.push(`partial, model pinned by config: ${inspection.pinned.join(", ")}`)
+
+    const parts = [`profile "${plan.active}" applied`]
+    if (plan.unassigned.length > 0) {
+      parts.push(`unassigned agents fell back to rest: ${plan.unassigned.join(", ")}`)
     }
-    log(inspection.pinned.length > 0 ? "warn" : "log", parts.join(" | "))
+    if (inspection.fixedByConfig.length > 0) {
+      parts.push(`partial, model fixed by config: ${inspection.fixedByConfig.join(", ")}`)
+    }
+    if (inspection.unapplied.length > 0) {
+      parts.push(`no model after the reload: ${inspection.unapplied.join(", ")}`)
+    }
+    const clean = inspection.fixedByConfig.length === 0 && inspection.unapplied.length === 0
+    log(clean ? "log" : "warn", parts.join(" | "))
   }
 
   async function boot(): Promise<void> {
@@ -195,7 +219,9 @@ export async function setupProfileSwitcher(
         listed = await listAgents()
       } catch (error) {
         if (attempt === attempts - 1) {
-          log("warn", `could not list agents (${(error as Error).message}); markdown agents wait for the next switch`)
+          const message = `could not list agents (${(error as Error).message})`
+          log("warn", `${message}; markdown agents wait for the next switch`)
+          fail(message)
           return
         }
         await sleep(baseDelay * 2 ** attempt)
@@ -210,19 +236,27 @@ export async function setupProfileSwitcher(
   function status(): StatusOutput {
     const invalid = read.status === "invalid"
     const plan = planApply(read.profiles)
-    const partial = !invalid && plan.applied && (inspection?.pinned.length ?? 0) > 0
+    // Profile names come from disk on every call so a profile the wizard just
+    // wrote shows up; what is applied stays the last pass's.
+    const fresh = readProfiles(path)
+    const names = Object.keys((fresh.status === "invalid" ? read : fresh).profiles.profiles)
+    const settled = phase === "ready" && !invalid ? inspection : undefined
+    const fixedByConfig = settled?.fixedByConfig ?? []
     return {
-      ready,
+      ready: phase === "ready",
+      phase,
       path,
-      profiles: Object.keys(read.profiles.profiles),
+      profiles: names,
       active: read.profiles.active || null,
       applied: !invalid && plan.applied,
       reason: invalid ? "invalid-file" : plan.applied ? null : plan.reason,
-      error: invalid ? (read.error ?? "invalid profiles.json") : null,
-      partial,
-      pinned: invalid ? [] : [...(inspection?.pinned ?? [])],
-      unassigned: invalid ? [] : [...(inspection?.plan.unassigned ?? [])],
-      agents: invalid ? [] : (inspection?.agents ?? []).map((agent) => ({ ...agent })),
+      error: invalid ? (read.error ?? "invalid profiles.json") : passError,
+      partial: fixedByConfig.length > 0,
+      fixedByConfig: [...fixedByConfig],
+      unapplied: [...(settled?.unapplied ?? [])],
+      unassigned: [...(settled?.plan.unassigned ?? [])],
+      invalidSlots: invalid ? [] : invalidSlots(read.profiles),
+      agents: (settled?.agents ?? []).map((agent) => ({ ...agent })),
     }
   }
 
@@ -240,6 +274,10 @@ export async function setupProfileSwitcher(
       return { ok: false, error: "invalid_profiles", message: `profiles.json is corrupt: ${persisted.error}` }
     }
     read = persisted
+    // From here the previous pass no longer describes the agents.
+    phase = "pending"
+    passError = null
+    inspection = undefined
 
     const previous = learned
     try {
@@ -249,11 +287,10 @@ export async function setupProfileSwitcher(
       await settle(await listAgents())
     } catch (error) {
       if (learned.size === 0) learned = previous
-      return {
-        ok: false,
-        error: "reload_failed",
-        message: `profile "${profile}" persisted but the reload failed: ${(error as Error).message}`,
-      }
+      const message = `profile "${profile}" persisted but the reload failed: ${(error as Error).message}`
+      log("error", message)
+      fail(message)
+      return { ok: false, error: "reload_failed", message }
     }
     return { ok: true, status: status() }
   }
@@ -261,13 +298,14 @@ export async function setupProfileSwitcher(
   const registration = await ctx.rpc.register(ProfileSwitcherRpc, {
     status: async () => status(),
     switch: async (input, context) => {
-      const outcome = await serial(() => switchTo((input as SwitchInput).profile))
+      const { profile } = input as SwitchInput
+      const outcome = await serial(() => switchTo(profile))
       if (!outcome.ok) return context.error(outcome.error, outcome.message, null)
       try {
         await registration.events.emit("switched", {
-          profile: (input as SwitchInput).profile,
+          profile,
           partial: outcome.status.partial,
-          pinned: outcome.status.pinned,
+          fixedByConfig: outcome.status.fixedByConfig,
         })
       } catch (error) {
         log("warn", `switched event not delivered (${(error as Error).message})`)
@@ -277,7 +315,9 @@ export async function setupProfileSwitcher(
   })
 
   const bootPass = serial(boot).catch((error) => {
-    log("error", `boot pass failed: ${(error as Error).message}`)
+    const message = `boot pass failed: ${(error as Error).message}`
+    log("error", message)
+    fail(message)
   })
 
   return {

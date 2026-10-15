@@ -127,27 +127,44 @@ describe("boot", () => {
     save(file())
     const host = new FakeHost({ config: { reviewer: {} }, listFailures: 99 })
     const switcher = await boot(host, { learnAttempts: 3 })
-    expect(switcher.status().ready).toBe(false)
+    expect(switcher.status()).toMatchObject({ ready: false, phase: "failed", agents: [] })
+    expect(switcher.status().error).toContain("could not list agents (location not ready)")
     expect(host.agent("build")!.model).toEqual(GLM5)
     expect(host.agent("reviewer")!.model).toBeUndefined()
     expect(logs.some((line) => line.startsWith("warn: could not list agents"))).toBe(true)
+
+    // Not stuck: the next switch learns the agents and settles.
+    host.listFailures = 0
+    await host.call("switch", { profile: "gpt" })
+    expect(switcher.status()).toMatchObject({ ready: true, phase: "ready", error: null })
+    expect(host.agent("reviewer")!.model).toEqual(GPT)
   })
 
-  test("detects agents pinned by config and reports the profile as partial", async () => {
+  test("the status is pending until the boot pass settles", async () => {
+    save(file())
+    const host = new FakeHost()
+    const switcher = await setupProfileSwitcher(host.context(), { path, log: () => {} })
+    expect(switcher.status()).toMatchObject({ ready: false, phase: "pending", error: null })
+    host.load()
+    await switcher.ready
+    expect(switcher.status()).toMatchObject({ ready: true, phase: "ready" })
+  })
+
+  test("detects agents fixed by config and reports the profile as partial", async () => {
     save(file())
     const host = new FakeHost({ config: { plan: { model: GPT }, reviewer: { model: MINI } } })
     const switcher = await boot(host)
     const status = switcher.status()
     expect(status.partial).toBe(true)
-    expect(status.pinned).toEqual(["plan", "reviewer"])
+    expect(status.fixedByConfig).toEqual(["plan", "reviewer"])
     expect(status.agents.find((agent) => agent.id === "plan")).toEqual({
       id: "plan",
       placement: "heavy",
       planned: GLM5,
       model: GPT,
-      pinned: true,
+      fixedByConfig: true,
     })
-    expect(logs.some((line) => line.includes("partial, model pinned by config: plan, reviewer"))).toBe(true)
+    expect(logs.some((line) => line.includes("partial, model fixed by config: plan, reviewer"))).toBe(true)
   })
 
   test("persists the effective state of the agents that took the profile only", async () => {
@@ -157,7 +174,7 @@ describe("boot", () => {
     const effective = onDisk().effective
     expect(effective.build).toEqual({ model: "zai/glm-5", variant: "max" })
     expect(effective.title).toEqual({ model: "zai/glm-4" })
-    // Pinned: the plugin never applied anything, the remembered slot stays.
+    // Fixed by config: the plugin never applied anything, the remembered slot stays.
     expect(effective.plan).toEqual({ model: "old/model" })
   })
 
@@ -178,6 +195,47 @@ describe("boot", () => {
     expect(host.agent("build")!.model).toBeUndefined()
     expect(switcher.status()).toMatchObject({ active: null, applied: false, reason: "no-active", error: null })
   })
+
+  test("a slot with an embedded #variant is reported and logged, not skipped in silence", async () => {
+    const profiles = file()
+    profiles.profiles.glm!.heavy = { model: "zai/glm-5#max" }
+    save(profiles)
+    const host = new FakeHost()
+    const switcher = await boot(host)
+    expect(host.agent("build")!.model).toBeUndefined()
+    expect(host.defaultModel).toBeUndefined()
+    expect(host.agent("explore")!.model).toEqual(GLM4)
+    expect(switcher.status().invalidSlots).toEqual([
+      { placement: "heavy", agent: null, model: "zai/glm-5#max" },
+    ])
+    expect(logs).toContain(
+      'warn: invalid model, expected provider/model with the variant apart; left untouched: "zai/glm-5#max" for the heavy tier',
+    )
+  })
+
+  test("an agent left with no model is reported unapplied, not fixed by config", async () => {
+    save(file())
+    const host = new FakeHost()
+    host.dropModel.add("explore")
+    const switcher = await boot(host)
+    expect(switcher.status()).toMatchObject({ partial: false, fixedByConfig: [], unapplied: ["explore"] })
+    expect(logs.some((line) => line.includes("no model after the reload: explore"))).toBe(true)
+    expect(logs.some((line) => line.includes("fixed by config"))).toBe(false)
+    expect(onDisk().effective.explore).toBeUndefined()
+  })
+
+  test("profile names are re-read on each status call", async () => {
+    save(file())
+    const host = new FakeHost()
+    const switcher = await boot(host)
+    const edited = file()
+    edited.profiles.fresh = { ...edited.profiles.gpt! }
+    save(edited)
+    expect(switcher.status().profiles).toEqual(["glm", "gpt", "fresh"])
+    // A corrupt file falls back to the names already known.
+    writeFileSync(path, "{ broken")
+    expect(switcher.status().profiles).toEqual(["glm", "gpt"])
+  })
 })
 
 describe("rpc", () => {
@@ -196,7 +254,7 @@ describe("rpc", () => {
       reason: null,
       error: null,
       partial: true,
-      pinned: ["plan"],
+      fixedByConfig: ["plan"],
       unassigned: [],
     })
     expect(status.agents.find((agent) => agent.id === "explore")).toEqual({
@@ -204,7 +262,7 @@ describe("rpc", () => {
       placement: "rest",
       planned: { ...GLM4, variant: null },
       model: { ...GLM4, variant: null },
-      pinned: false,
+      fixedByConfig: false,
     })
   })
 
@@ -221,9 +279,9 @@ describe("rpc", () => {
     expect(host.agent("explore")!.model).toEqual(MINI)
     // A markdown agent takes the new profile too.
     expect(host.agent("reviewer")!.model).toEqual(GPT)
-    expect(status).toMatchObject({ active: "gpt", partial: false, pinned: [] })
+    expect(status).toMatchObject({ active: "gpt", partial: false, fixedByConfig: [] })
     expect(host.rpc!.emitted).toEqual([
-      { name: "switched", data: { profile: "gpt", partial: false, pinned: [] } },
+      { name: "switched", data: { profile: "gpt", partial: false, fixedByConfig: [] } },
     ])
     expect(onDisk().effective.reviewer).toEqual({ model: "openai/gpt-5", variant: "high" })
   })
@@ -261,14 +319,14 @@ describe("rpc", () => {
     expect(host.agentReloads).toBe(2)
   })
 
-  test("switch reports pinned agents in the event", async () => {
+  test("switch reports agents fixed by config in the event", async () => {
     save(file())
     const host = new FakeHost({ config: { build: { model: MINI } } })
     await boot(host)
     await host.call("switch", { profile: "gpt" })
     expect(host.rpc!.emitted.at(-1)).toEqual({
       name: "switched",
-      data: { profile: "gpt", partial: true, pinned: ["build"] },
+      data: { profile: "gpt", partial: true, fixedByConfig: ["build"] },
     })
   })
 
@@ -302,6 +360,37 @@ describe("rpc", () => {
     expect(result).toMatchObject({ rpcError: true, type: "reload_failed" })
     expect(onDisk().active).toBe("gpt")
     expect(host.rpc!.emitted).toEqual([])
+  })
+
+  test("after a failed reload the status reports the failure, never the old profile's agents", async () => {
+    save(file())
+    const host = new FakeHost({ config: { plan: { model: MINI } } })
+    await boot(host)
+    expect((await host.call("status")) as StatusOutput).toMatchObject({ partial: true })
+
+    host.failReload = true
+    await host.call("switch", { profile: "gpt" })
+    const failed = (await host.call("status")) as StatusOutput
+    expect(failed).toMatchObject({
+      ready: false,
+      phase: "failed",
+      active: "gpt",
+      partial: false,
+      fixedByConfig: [],
+      unassigned: [],
+      agents: [],
+    })
+    expect(failed.error).toContain("reload exploded")
+
+    // The next switch runs a full pass again.
+    host.failReload = false
+    await host.call("switch", { profile: "gpt" })
+    expect((await host.call("status")) as StatusOutput).toMatchObject({
+      ready: true,
+      phase: "ready",
+      error: null,
+      fixedByConfig: ["plan"],
+    })
   })
 
   test("concurrent switches run one after the other", async () => {
