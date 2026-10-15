@@ -1,0 +1,167 @@
+// The contract between the server half (registers the handlers) and the TUI
+// half (calls them through `ctx.client.rpc(ProfileSwitcherRpc)`). Published as
+// `opencode-profile-switcher-v2/rpc`. Self-contained on purpose: it imports
+// nothing from the core, so its declarations ship as they are.
+import { Rpc } from "@opencode/plugin/rpc"
+
+/** Server plugin id. Fixed: the host keys the plugin's storage by it. */
+export const PLUGIN_ID = "opencode-profile-switcher-v2"
+
+/**
+ * RPC id. Fixed: clients see the event as `rpc.opencode-profile-switcher.switched`.
+ * Host-neutral on purpose, so a later TUI plugin with its own id can share it.
+ */
+export const RPC_ID = "opencode-profile-switcher"
+
+/** A model as opencode 2.0 addresses it. `variant` is `null` when unset. */
+export interface ModelJson {
+  providerID: string
+  id: string
+  variant: string | null
+}
+
+/** One agent of the location as the profile left it (after the last reload). */
+export interface AgentStatus {
+  /** The agent id, which is also its key in `profiles.json` placements. */
+  id: string
+  /** The agent's placement in the active profile; `null` when it has none. */
+  placement: "heavy" | "rest" | "specific" | "excluded" | null
+  /** The model the profile asked for; `null` when it leaves the agent alone. */
+  planned: ModelJson | null
+  /**
+   * The model the agent ended up with — what a session on this agent should
+   * switch to. Differs from `planned` exactly when the agent is pinned.
+   */
+  model: ModelJson | null
+  /** The user's config defines this agent's model, so the profile lost (ADR-0003). */
+  pinned: boolean
+}
+
+export interface StatusOutput {
+  /**
+   * False until the plugin has learned the location's agent ids and applied
+   * the profile to all of them; `agents`, `pinned` and `partial` are empty
+   * until then.
+   */
+  ready: boolean
+  /** Where `profiles.json` lives for this server. */
+  path: string
+  /** Names of every profile defined in `profiles.json`. */
+  profiles: string[]
+  /** The active profile, or `null` when none is set. */
+  active: string | null
+  /** Whether the active profile is being applied. */
+  applied: boolean
+  /** Why nothing is applied, when `applied` is false. */
+  reason: "no-active" | "unknown-active" | "invalid-file" | null
+  /** A readable problem with `profiles.json`, if any. */
+  error: string | null
+  /** Some agents of the active profile are pinned by config. */
+  partial: boolean
+  /** Ids of the pinned agents. */
+  pinned: string[]
+  /** Agents with no placement in the active profile, applied as `rest`. */
+  unassigned: string[]
+  agents: AgentStatus[]
+}
+
+export interface SwitchInput {
+  profile: string
+}
+
+export interface SwitchedEvent {
+  profile: string
+  partial: boolean
+  pinned: string[]
+}
+
+// Nullable fields carry no `type`: the host validates outputs against these
+// schemas, and plain keywords are what every JSON Schema validator agrees on.
+const status = {
+  type: "object",
+  properties: {
+    ready: { type: "boolean" },
+    path: { type: "string" },
+    profiles: { type: "array", items: { type: "string" } },
+    active: {},
+    applied: { type: "boolean" },
+    reason: {},
+    error: {},
+    partial: { type: "boolean" },
+    pinned: { type: "array", items: { type: "string" } },
+    unassigned: { type: "array", items: { type: "string" } },
+    agents: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          placement: {},
+          planned: {},
+          model: {},
+          pinned: { type: "boolean" },
+        },
+        required: ["id", "placement", "planned", "model", "pinned"],
+      },
+    },
+  },
+  required: [
+    "ready",
+    "path",
+    "profiles",
+    "active",
+    "applied",
+    "reason",
+    "error",
+    "partial",
+    "pinned",
+    "unassigned",
+    "agents",
+  ],
+} as const
+
+const failure = { type: "null" } as const
+
+export const ProfileSwitcherRpc = Rpc.define({
+  id: RPC_ID,
+  methods: {
+    /** The active profile and how it landed on the location's agents. */
+    status: {
+      input: { type: "object" },
+      output: status,
+    },
+    /**
+     * Persist `profile` as active, reload the agents (and the default model)
+     * and emit `switched`. Returns the status after the switch.
+     */
+    switch: {
+      input: {
+        type: "object",
+        properties: { profile: { type: "string", minLength: 1 } },
+        required: ["profile"],
+      },
+      output: status,
+      errors: {
+        /** No profile by that name in `profiles.json`. */
+        unknown_profile: failure,
+        /** `profiles.json` is corrupt; it is never overwritten. */
+        invalid_profiles: failure,
+        /** The profile was persisted but the host failed to reload. */
+        reload_failed: failure,
+      },
+    },
+  },
+  events: {
+    switched: {
+      schema: {
+        type: "object",
+        properties: {
+          profile: { type: "string" },
+          partial: { type: "boolean" },
+          pinned: { type: "array", items: { type: "string" } },
+        },
+        required: ["profile", "partial", "pinned"],
+      },
+    },
+  },
+})
