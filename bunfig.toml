@@ -1,0 +1,9 @@
+[install]
+# Keep the flat node_modules the 1.x package was developed against: with a
+# workspace Bun defaults to the isolated linker, which stops hoisting the
+# peers the 1.x TUI tests import (solid-js).
+linker = "hoisted"
+
+[test]
+# The 1.x suite. packages/v2 runs its own (bun test inside packages/v2).
+root = "test"

@@ -1,0 +1,7 @@
+{
+  // What the published 1.x package ships: the v1 entries and every module
+  // they reach. Core modules only the 2.0 adapter uses stay out of dist/.
+  "extends": "./tsconfig.json",
+  "include": [],
+  "files": ["src/v1/server.ts", "src/v1/tui.ts"]
+}
