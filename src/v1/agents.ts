@@ -1,6 +1,6 @@
-import type { AgentInfo } from "../core/wizard.js"
+import type { AgentInfo } from "../core/agent.js"
 
-export type { AgentInfo } from "../core/wizard.js"
+export type { AgentInfo } from "../core/agent.js"
 
 /**
  * Minimal shape of the plugin `client` needed to enumerate agents. Kept loose

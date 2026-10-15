@@ -1,18 +1,8 @@
+import type { AgentInfo } from "./agent.js"
 import type { Placement, Profile, ProfilesFile, SpecificSlot } from "./schema.js"
 import type { SelectOption } from "./select.js"
 
 export type { Placement, SpecificSlot } from "./schema.js"
-
-/**
- * An agent's identity plus the two flags the wizard needs to pick a default
- * tier: its `mode` (primary agents default to `heavy`, subagents to `rest`) and
- * whether it is `hidden` (hidden system agents default to `rest`).
- */
-export interface AgentInfo {
-  name: string
-  mode: "primary" | "subagent" | "all"
-  hidden: boolean
-}
 
 /** A profile's agent → placement map. */
 export type Placements = Record<string, Placement>

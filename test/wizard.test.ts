@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { AgentInfo } from "../src/core/wizard.js"
+import type { AgentInfo } from "../src/core/agent.js"
 import type { Placement, Profile, ProfilesFile } from "../src/core/schema.js"
 import {
   buildPlacementOptions,
