@@ -51,6 +51,6 @@ export function slotToModelRef(slot: EffectiveSlot): ModelRef | undefined {
 
 /** A model ref as a `profiles.json` slot (`"provider/model"` + variant apart). */
 export function modelRefToSlot(ref: ModelRef): EffectiveSlot {
-  const model = `${ref.providerID}/${ref.modelID}`
+  const model = formatModelRef({ providerID: ref.providerID, modelID: ref.modelID })
   return ref.variant ? { model, variant: ref.variant } : { model }
 }
