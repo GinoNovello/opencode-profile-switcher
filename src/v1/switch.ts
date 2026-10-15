@@ -1,8 +1,5 @@
 import { readProfiles, setActiveProfile } from "../core/config.js"
 import { defaultProfilesPath } from "../core/paths.js"
-import type { SwitchResult } from "../core/picker.js"
-
-export type { SwitchResult } from "../core/picker.js"
 
 /**
  * Minimal shape of the plugin `client` needed to trigger a live switch. The
@@ -23,6 +20,17 @@ export interface SwitchOptions {
    * on the next boot).
    */
   dispose?: boolean
+}
+
+export interface SwitchResult {
+  /** True when the profile was persisted as active. */
+  ok: boolean
+  /** The now-active profile name (present on success). */
+  active?: string
+  /** Whether `instance.dispose()` was called successfully. */
+  disposed: boolean
+  /** Failure reason, or a partial-success note (persisted but dispose failed). */
+  error?: string
 }
 
 /**

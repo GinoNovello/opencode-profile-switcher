@@ -18,10 +18,11 @@ import {
   switchResultToast,
   formatAlreadyActiveToast,
   type PickerAction,
+  type SwitchOutcome,
 } from "../core/picker.js"
 import type { Profile, ProfilesFile } from "../core/schema.js"
 import type { SelectOption } from "../core/select.js"
-import { switchProfile, type DisposableClient } from "./switch.js"
+import { switchProfile, type DisposableClient, type SwitchResult } from "./switch.js"
 import {
   buildPlacementOptions,
   buildProfile,
@@ -74,6 +75,11 @@ function toast(ctx: Ctx, variant: "info" | "success" | "warning" | "error", mess
 
 function closeDialogs(ctx: Ctx): void {
   ctx.api.ui.dialog.clear()
+}
+
+/** In 1.x the live reload is `instance.dispose()`; the toast only needs whether it ran. */
+function switchOutcome(result: SwitchResult): SwitchOutcome {
+  return { ok: result.ok, reloaded: result.disposed, error: result.error }
 }
 
 function showSelect<Value>(
@@ -172,7 +178,7 @@ async function persistAndSwitch(ctx: Ctx, next: ProfilesFile, name: string): Pro
   })
   const profile = next.profiles[name]
   if (profile) {
-    const t = switchResultToast(name, profile, result)
+    const t = switchResultToast(name, profile, switchOutcome(result))
     toast(ctx, t.variant, t.message)
   }
   closeDialogs(ctx)
@@ -669,7 +675,7 @@ function handlePick(ctx: Ctx, file: ProfilesFile, action: PickerAction): void {
         const result = await switchProfile(name, ctx.api.client as unknown as DisposableClient, {
           path: ctx.path,
         })
-        const t = switchResultToast(name, profile, result)
+        const t = switchResultToast(name, profile, switchOutcome(result))
         toast(ctx, t.variant, t.message)
         closeDialogs(ctx)
       })()

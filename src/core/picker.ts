@@ -100,17 +100,15 @@ export function formatAlreadyActiveToast(name: string): string {
 }
 
 /**
- * Outcome of a profile switch (`switchProfile` in the 1.x adapter). Defined
- * here because `switchResultToast` consumes it and must stay host-independent.
+ * What the toast needs to know about a profile switch, whatever host ran it.
+ * Each adapter maps its own switch result onto this.
  */
-export interface SwitchResult {
+export interface SwitchOutcome {
   /** True when the profile was persisted as active. */
   ok: boolean
-  /** The now-active profile name (present on success). */
-  active?: string
-  /** Whether `instance.dispose()` was called successfully. */
-  disposed: boolean
-  /** Failure reason, or a partial-success note (persisted but dispose failed). */
+  /** Whether the host reloaded live so the new profile is already in effect. */
+  reloaded: boolean
+  /** Failure reason, when `ok` is false. */
   error?: string
 }
 
@@ -120,15 +118,15 @@ export interface SwitchToast {
 }
 
 /**
- * Map a `switchProfile` result onto a toast. A partial success (persisted but
+ * Map a switch outcome onto a toast. A partial success (persisted but
  * the live reload failed) becomes a warning telling the user to restart; a hard
  * failure becomes an error.
  */
-export function switchResultToast(name: string, profile: Profile, result: SwitchResult): SwitchToast {
+export function switchResultToast(name: string, profile: Profile, result: SwitchOutcome): SwitchToast {
   if (!result.ok) {
     return { variant: "error", message: `Could not switch profile: ${result.error ?? "unknown error"}` }
   }
-  if (!result.disposed) {
+  if (!result.reloaded) {
     return {
       variant: "warning",
       message: `Profile "${name}" saved but live reload failed — restart opencode to apply it.`,
