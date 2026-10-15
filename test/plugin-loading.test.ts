@@ -96,14 +96,14 @@ function loadAsFilePathPlugin(mod: Record<string, unknown>, spec: string, kind: 
 
 describe("loading the built plugin from an absolute file path (as the user's opencode.jsonc does)", () => {
   test("the /tui entry survives opencode's file-path loader (registers /profile)", async () => {
-    const mod = (await import("../src/tui.js")) as unknown as Record<string, unknown>
+    const mod = (await import("../src/v1/tui.js")) as unknown as Record<string, unknown>
     expect(() =>
       loadAsFilePathPlugin(mod, "/abs/path/to/dist/tui.js", "tui"),
     ).not.toThrow()
   })
 
   test("the /server entry survives opencode's file-path loader (applies the profile)", async () => {
-    const mod = (await import("../src/server.js")) as unknown as Record<string, unknown>
+    const mod = (await import("../src/v1/server.js")) as unknown as Record<string, unknown>
     expect(() =>
       loadAsFilePathPlugin(mod, "/abs/path/to/dist/server.js", "server"),
     ).not.toThrow()

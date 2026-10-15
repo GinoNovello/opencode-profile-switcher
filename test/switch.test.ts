@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { writeProfiles } from "../src/config.js"
-import type { ProfilesFile } from "../src/schema.js"
-import { switchProfile, type DisposableClient } from "../src/switch.js"
+import { writeProfiles } from "../src/core/config.js"
+import type { ProfilesFile } from "../src/core/schema.js"
+import { switchProfile, type DisposableClient } from "../src/v1/switch.js"
 
 let dir: string
 let path: string

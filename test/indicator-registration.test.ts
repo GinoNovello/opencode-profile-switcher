@@ -4,8 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { testRender } from "@opentui/solid"
 import { jsx } from "@opentui/solid/jsx-runtime"
-import tuiModule from "../src/tui.js"
-import type { ProfilesFile } from "../src/schema.js"
+import tuiModule from "../src/v1/tui.js"
+import type { ProfilesFile } from "../src/core/schema.js"
 
 /**
  * These tests mount the indicator slot with opentui's headless test renderer,

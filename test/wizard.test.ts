@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { AgentInfo } from "../src/agents.js"
-import type { Placement, Profile, ProfilesFile } from "../src/schema.js"
+import type { AgentInfo } from "../src/core/wizard.js"
+import type { Placement, Profile, ProfilesFile } from "../src/core/schema.js"
 import {
   buildPlacementOptions,
   buildProfile,
@@ -25,7 +25,7 @@ import {
   suggestedDuplicateName,
   updateProfile,
   validateProfileName,
-} from "../src/wizard.js"
+} from "../src/core/wizard.js"
 
 const agents: AgentInfo[] = [
   { name: "build", mode: "primary", hidden: false },

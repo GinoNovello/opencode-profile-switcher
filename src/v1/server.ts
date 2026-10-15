@@ -1,7 +1,7 @@
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import type { Plugin, PluginModule } from "@opencode-ai/plugin"
 import { applyProfile, type MutableConfig } from "./apply.js"
-import { readProfiles, writeEffectiveState } from "./config.js"
+import { readProfiles, writeEffectiveState } from "../core/config.js"
 
 const LOG_SERVICE = "profile-switcher"
 
@@ -90,9 +90,9 @@ export const server: Plugin = async ({ client }) => {
 export default { id: "opencode-profile-switcher", server } satisfies PluginModule
 
 // Public API consumed by the TUI (#18) and downstream tooling.
-export * from "./schema.js"
-export * from "./config.js"
+export * from "../core/schema.js"
+export * from "../core/config.js"
 export * from "./apply.js"
 export * from "./switch.js"
 export * from "./agents.js"
-export { defaultProfilesPath } from "./paths.js"
+export { defaultProfilesPath } from "../core/paths.js"

@@ -8,8 +8,8 @@ import {
   shortModel,
   specificCount,
   switchResultToast,
-} from "../src/picker.js"
-import type { Profile, ProfilesFile } from "../src/schema.js"
+} from "../src/core/picker.js"
+import type { Profile, ProfilesFile } from "../src/core/schema.js"
 
 const glm: Profile = {
   heavy: { model: "zai/glm-5", variant: "max" },

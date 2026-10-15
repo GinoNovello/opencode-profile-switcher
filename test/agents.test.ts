@@ -4,7 +4,7 @@ import {
   refreshAgents,
   type AgentListerClient,
   type AgentRefreshClient,
-} from "../src/agents.js"
+} from "../src/v1/agents.js"
 
 function client(result: unknown): AgentListerClient {
   return { app: { agents: async () => result } }

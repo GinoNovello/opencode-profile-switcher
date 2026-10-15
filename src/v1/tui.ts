@@ -3,24 +3,24 @@ import type { JSX } from "@opentui/solid"
 import { jsx } from "@opentui/solid/jsx-runtime"
 import { createSignal } from "solid-js"
 import { refreshAgents, type AgentRefreshClient } from "./agents.js"
-import { readProfiles, writeProfiles } from "./config.js"
-import { formatProfileIndicator } from "./indicator.js"
+import { readProfiles, writeProfiles } from "../core/config.js"
+import { formatProfileIndicator } from "../core/indicator.js"
 import {
   buildModelOptions,
   buildVariantOptions,
   findModel,
   NO_VARIANT,
   type ProviderLike,
-} from "./models.js"
-import { defaultProfilesPath } from "./paths.js"
+} from "../core/models.js"
+import { defaultProfilesPath } from "../core/paths.js"
 import {
   buildPickerOptions,
   switchResultToast,
   formatAlreadyActiveToast,
   type PickerAction,
-} from "./picker.js"
-import type { Profile, ProfilesFile } from "./schema.js"
-import type { SelectOption } from "./select.js"
+} from "../core/picker.js"
+import type { Profile, ProfilesFile } from "../core/schema.js"
+import type { SelectOption } from "../core/select.js"
 import { switchProfile, type DisposableClient } from "./switch.js"
 import {
   buildPlacementOptions,
@@ -43,7 +43,7 @@ import {
   validateProfileName,
   type Placements,
   type Specifics,
-} from "./wizard.js"
+} from "../core/wizard.js"
 
 /**
  * TUI plugin entry (`opencode-profile-switcher/tui`) — ticket #18.

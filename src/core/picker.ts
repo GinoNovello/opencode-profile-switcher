@@ -1,6 +1,5 @@
 import type { Profile, ProfilesFile } from "./schema.js"
 import type { SelectOption } from "./select.js"
-import type { SwitchResult } from "./switch.js"
 
 /**
  * The two synthetic actions that sit at the bottom of the `/profile` picker,
@@ -98,6 +97,21 @@ export function formatSwitchToast(name: string, profile: Profile): string {
 /** Toast shown when the picked profile was already the active one. */
 export function formatAlreadyActiveToast(name: string): string {
   return `Profile "${name}" is already active`
+}
+
+/**
+ * Outcome of a profile switch (`switchProfile` in the 1.x adapter). Defined
+ * here because `switchResultToast` consumes it and must stay host-independent.
+ */
+export interface SwitchResult {
+  /** True when the profile was persisted as active. */
+  ok: boolean
+  /** The now-active profile name (present on success). */
+  active?: string
+  /** Whether `instance.dispose()` was called successfully. */
+  disposed: boolean
+  /** Failure reason, or a partial-success note (persisted but dispose failed). */
+  error?: string
 }
 
 export interface SwitchToast {

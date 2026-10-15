@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { applyProfile, type MutableConfig } from "../src/apply.js"
-import type { ProfilesFile } from "../src/schema.js"
+import { applyProfile, type MutableConfig } from "../src/v1/apply.js"
+import type { ProfilesFile } from "../src/core/schema.js"
 
 function makeProfiles(overrides: Partial<ProfilesFile> = {}): ProfilesFile {
   return {

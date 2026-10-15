@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import tuiModule from "../src/tui.js"
+import tuiModule from "../src/v1/tui.js"
 
 // Regression: our TUI entrypoint must default-export the { id, tui } module shape
 // opencode's loader requires, and tui(api) must register a `/profile` slash

@@ -1,4 +1,4 @@
-import type { EffectiveSlot, Profile, ProfilesFile, TierName } from "./schema.js"
+import type { EffectiveSlot, Profile, ProfilesFile, TierName } from "../core/schema.js"
 
 /**
  * The subset of an agent's config we mutate. Structurally compatible with

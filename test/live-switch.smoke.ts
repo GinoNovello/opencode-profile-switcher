@@ -2,9 +2,9 @@ import { expect, test } from "bun:test"
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { readProfiles, writeProfiles } from "../src/config.js"
-import type { ProfilesFile } from "../src/schema.js"
-import { switchProfile, type DisposableClient } from "../src/switch.js"
+import { readProfiles, writeProfiles } from "../src/core/config.js"
+import type { ProfilesFile } from "../src/core/schema.js"
+import { switchProfile, type DisposableClient } from "../src/v1/switch.js"
 
 const repo = resolve(import.meta.dir, "..")
 const opencode = Bun.which("opencode")
@@ -54,7 +54,7 @@ test("switches the shipped server plugin live without restarting opencode", asyn
     `${JSON.stringify({
       $schema: "https://opencode.ai/config.json",
       model: "seed/should-be-overridden",
-      plugin: [resolve(repo, "dist/server.js")],
+      plugin: [resolve(repo, "dist/v1/server.js")],
     })}\n`,
   )
 

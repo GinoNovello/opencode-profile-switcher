@@ -7,7 +7,7 @@ import {
   modelString,
   NO_VARIANT,
   type ProviderLike,
-} from "../src/models.js"
+} from "../src/core/models.js"
 
 const providers: ProviderLike[] = [
   {
