@@ -5,7 +5,7 @@ import { createSignal } from "solid-js"
 import { formatProfileIndicator } from "../../../src/core/indicator.js"
 import { buildPickerOptions } from "../../../src/core/picker.js"
 import type { ProfilesFile } from "../../../src/core/schema.js"
-import { ProfileSwitcherRpc, type StatusOutput } from "./rpc.js"
+import { ProfileSwitcherRpc, type StatusOutput, type SaveProfilesOutput } from "./rpc.js"
 import { mapProviders } from "./tui-models.js"
 import { configureProfile, editProfile } from "./tui-wizard.js"
 
@@ -30,6 +30,8 @@ export function setupTui(ctx: Context): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined
   let retries = 0
   let lastFailure: string | undefined
+  let loadError: unknown
+  let errorStreak = false
   let busy = false
   const errorToast = (error: unknown) => {
     const failure = error && typeof error === "object" ? error : undefined
@@ -45,6 +47,7 @@ export function setupTui(ctx: Context): () => void {
   const schedule = (delay = 250) => {
     if (!disposed && timer === undefined) timer = setTimeout(() => { timer = undefined; void refresh() }, delay)
   }
+  const retry = () => { schedule(Math.min(250 * 2 ** retries, 2000)); retries = Math.min(retries + 1, 3) }
   const refresh = (at = location(), fresh = false): Promise<StatusOutput | undefined> => {
     if (disposed) return Promise.resolve(undefined)
     if (fresh) generation++
@@ -63,13 +66,17 @@ export function setupTui(ctx: Context): () => void {
         const file = await rpc.readProfiles({}, { location: at }) as ProfilesFile
         if (disposed || current !== generation) return
         setDocument(file)
-        retries = 0
-        if (status.phase === "pending") schedule()
+        loadError = undefined
+        errorStreak = false
+        if (status.phase !== "ready") retry()
+        else retries = 0
         return status
       } catch (error) {
         if (!disposed && current === generation) {
-          if (retries === 0) errorToast(error)
-          if (retries < 5) schedule(Math.min(250 * 2 ** retries++, 2000))
+          loadError = error
+          if (!errorStreak) errorToast(error)
+          errorStreak = true
+          retry()
         }
       }
     })().finally(() => { if (refreshing?.generation === current) refreshing = undefined })
@@ -86,10 +93,11 @@ export function setupTui(ctx: Context): () => void {
     const session = await ctx.client.session.get({ sessionID: route.sessionID })
     if (disposed) return false
     const model = result.agents.find((agent) => agent.id === session.agent)?.model
+      ?? ctx.data.location.agent.list(at)?.find((agent) => agent.id === session.agent)?.model
     if (!model) return true
     await ctx.client.session.switchModel({
       sessionID: route.sessionID,
-      model: { providerID: model.providerID, id: model.id, ...(model.variant !== null ? { variant: model.variant } : {}) },
+      model: { providerID: model.providerID, id: model.id, ...(model.variant != null ? { variant: model.variant } : {}) },
     })
     return false
   }
@@ -120,6 +128,7 @@ export function setupTui(ctx: Context): () => void {
       if (disposed) return
       const status = snapshot()
       if (!status || status.phase === "pending") {
+        if (!status && loadError !== undefined) errorToast(loadError)
         if (status?.phase === "pending") ctx.ui.toast.show({ message: "Profiles are still loading. Try again shortly.", variant: "info" })
         return
       }
@@ -142,13 +151,12 @@ export function setupTui(ctx: Context): () => void {
         : await configureProfile(ui, file, providers, agents)
       if (!draft || disposed) return
       generation++
-      const saved = await rpc.saveProfiles({ profiles: draft.profiles, active: draft.active, expected: { profiles: file.profiles, active: file.active } }, { location: at }) as ProfilesFile
+      const saved = await rpc.saveProfiles({ profiles: draft.profiles, active: draft.active, expected: { profiles: file.profiles, active: file.active } }, { location: at }) as SaveProfilesOutput
       if (disposed) return
       generation++
       setDocument(saved)
       const sameModels = JSON.stringify(draft.profiles[draft.active]) === JSON.stringify(file.profiles[file.active])
-      const renamed = draft.active !== file.active && !Object.hasOwn(draft.profiles, file.active) && sameModels
-      if (draft.active && (!sameModels || (draft.active !== file.active && !renamed))) await switchProfile(draft.active, at)
+      if (draft.active && (!sameModels || (draft.active !== file.active && !saved.renamed))) await switchProfile(draft.active, at)
       else {
         let retained = false
         if (!draft.active && file.active) {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test, spyOn } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { jsx } from "@opentui/solid/jsx-runtime"
 import { EventEmitter } from "node:events"
@@ -13,7 +13,7 @@ const file: ProfilesFile = { active: "one", profiles: { one: profile, two: profi
 function status(overrides: Partial<StatusOutput> = {}): StatusOutput {
   return { ready: true, phase: "ready", path: "/fake/profiles.json", profiles: ["one", "two"], active: "one", applied: true, reason: null, error: null, partial: false, fixedByConfig: [], unapplied: [], unassigned: [], invalidSlots: [], agents: [{ id: "custom", placement: "heavy", planned: { providerID: "p", id: "heavy", variant: "max" }, model: { providerID: "config", id: "effective", variant: "high" }, fixedByConfig: true }], ...overrides }
 }
-function fake(route: { type: string; sessionID?: string } = { type: "session", sessionID: "focused" }) {
+function fake(route: { type: string; sessionID?: string } = { type: "session", sessionID: "focused" }, initialStatus?: () => Promise<StatusOutput>) {
   const calls: unknown[][] = []
   const toasts: { message: string; variant: string }[] = []
   const renderer = Object.assign(new EventEmitter(), { width: 100 })
@@ -24,11 +24,13 @@ function fake(route: { type: string; sessionID?: string } = { type: "session", s
   let slotStopped = false
   let state = status()
   let failure: { type: string; message: string } | undefined
-  let statusHook: (() => Promise<StatusOutput>) | undefined
+  let statusHook: (() => Promise<StatusOutput>) | undefined = initialStatus
   let read = structuredClone(file)
   let readHook: (() => Promise<ProfilesFile>) | undefined
   let selectHook: (() => Promise<unknown>) | undefined
   let switchHook: (() => Promise<void>) | undefined
+  let retarget = true
+  let cacheModel: { providerID: string; id: string; variant?: string } | undefined
   let currentLocation = { directory: "/test" }
   let response: unknown = { kind: "profile", name: "two" }
   let queue: unknown[] | undefined
@@ -36,7 +38,7 @@ function fake(route: { type: string; sessionID?: string } = { type: "session", s
     status: async (_: unknown, options: unknown) => { calls.push(["status", options]); return statusHook ? await statusHook() : state },
     readProfiles: async () => readHook ? await readHook() : read,
     switch: async (input: unknown, options: unknown) => { calls.push(["switch", input, options]); if (failure) throw failure; await switchHook?.(); state = { ...state, phase: "ready", active: (input as { profile: string }).profile }; return state },
-    saveProfiles: async (input, options) => { const draft = input as Pick<ProfilesFile, "profiles" | "active">; calls.push(["saveProfiles", input, options]); read = { ...draft, effective: {} }; state = { ...state, active: draft.active || null }; return read },
+    saveProfiles: async (input, options) => { const draft = input as Pick<ProfilesFile, "profiles" | "active">; calls.push(["saveProfiles", input, options]); const renamed = retarget && state.phase === "ready" && draft.active !== read.active && !Object.hasOwn(draft.profiles, read.active) && JSON.stringify(draft.profiles[draft.active]) === JSON.stringify(read.profiles[read.active]); read = { ...draft, effective: {} }; if (renamed) state = { ...state, active: draft.active }; else if (!draft.active) state = { ...state, active: null, agents: [] }; return { ...read, renamed } },
     events: { subscribe: async function* () {}, on: (name, callback) => { event = () => { void callback({ id: "event-test", created: 1, type: "rpc.opencode-profile-switcher.switched", data: { profile: state.active ?? "", partial: false, fixedByConfig: [] }, location: { directory: "/test" } } as RpcEventPayload<typeof ProfileSwitcherRpc, typeof name>) }; return () => { stopped = true } } },
   }
   const ctx = {
@@ -49,7 +51,7 @@ function fake(route: { type: string; sessionID?: string } = { type: "session", s
     data: { location: { default: () => currentLocation, agent: {
       invalidate: (location: unknown) => { calls.push(["invalidate", location]) },
       sync: async (location: unknown) => { calls.push(["sync", location]) },
-      list: () => [{ id: "custom", name: "Display name", mode: "primary", hidden: false }],
+      list: (at: unknown) => { calls.push(["agents", at]); return [{ model: cacheModel, id: "custom", name: "Display name", mode: "primary", hidden: false }] },
     }, provider: { sync: async () => {}, list: () => [{ id: "p", name: "Provider", activation: "enabled" }] },
     model: { sync: async () => {}, list: () => [{ id: "heavy", providerID: "p", name: "Heavy", enabled: true, variants: [{ id: "max" }] }] } } },
     keymap: { layer: (factory: () => { commands: { run: () => Promise<void> }[] }) => { command = factory().commands[0]! } },
@@ -60,6 +62,8 @@ function fake(route: { type: string; sessionID?: string } = { type: "session", s
   } as unknown as Plugin.Context
   const cleanup = setupTui(ctx)
   return { calls, toasts, renderer, cleanup, run: async () => command.run(), event: () => event(),
+    retarget: (value: boolean) => { retarget = value },
+    cacheModel: (value: typeof cacheModel) => { cacheModel = value },
     state: (value: StatusOutput) => { state = value }, fail: (type: string) => { failure = { type, message: `Host detail for ${type}` } },
     statusHook: (value?: () => Promise<StatusOutput>) => { statusHook = value },
     readHook: (value?: () => Promise<ProfilesFile>) => { readHook = value },
@@ -215,7 +219,7 @@ test("pending polling recovers from a transient status failure with backoff", as
     if (++reads === 1) throw { type: "transport", message: "temporarily unavailable" }
     return status()
   })
-  await new Promise((done) => setTimeout(done, 560))
+  await new Promise((done) => setTimeout(done, 850))
   expect(reads).toBe(2)
   host.choice(undefined); await host.run()
   expect(host.toasts.some((toast) => toast.message.includes("still loading"))).toBe(false)
@@ -225,10 +229,16 @@ test("pending polling recovers from a transient status failure with backoff", as
 for (const effective of [true, false]) test(`clearing active profile updates focused session or explains host null limitation (${effective})`, async () => {
   const host = fake(); await tick()
   host.choices([{ kind: "configure" }, "one", "Delete", true])
-  const cleared = status({ active: null, agents: effective ? status().agents : [] })
+  const cleared = status({ active: null, agents: [] })
+  if (effective) host.cacheModel({ providerID: "host", id: "default", variant: "low" })
   host.statusHook(async () => host.calls.some(([name]) => name === "saveProfiles") ? cleared : status())
   await host.run()
   expect(host.calls.map(([name]) => name)).toContain("invalidate")
+  if (effective) {
+    expect(host.calls.find(([name]) => name === "switchModel")?.[1]).toEqual({ sessionID: "focused", model: { providerID: "host", id: "default", variant: "low" } })
+    expect(host.calls.findIndex(([name]) => name === "sync")).toBeLessThan(host.calls.findIndex(([name]) => name === "switchModel"))
+    expect(host.calls.find(([name]) => name === "agents")?.[1]).toEqual({ directory: "/test" })
+  }
   expect(host.calls.filter(([name]) => name === "switchModel")).toHaveLength(effective ? 1 : 0)
   expect(host.toasts.at(-1)?.message).toContain("Other tabs keep their models")
   if (!effective) expect(host.toasts.at(-1)?.message).toContain("open session keeps its model until you choose another")
@@ -281,4 +291,67 @@ test("an empty profile document enters setup directly and seeds host agent defau
   expect(save.profiles.first?.placements).toEqual({ custom: "heavy" })
   expect(save.active).toBe("")
   host.cleanup()
+})
+
+for (const phase of ["failed", "ready"] as const) test(`active rename switches when server does not retarget (${phase})`, async () => {
+  const host = fake(); await tick()
+  host.state(status({ phase })); host.retarget(false)
+  host.choices([{ kind: "configure" }, "one", "Rename", "renamed"]); await host.run()
+  expect(host.calls.find(([name]) => name === "switch")?.[1]).toEqual({ profile: "renamed" })
+  expect(host.calls.map(([name]) => name)).toContain("switchModel")
+  host.cleanup()
+})
+
+test("polling survives more than five errors with capped backoff and one toast per streak", async () => {
+  const host = fake(); await tick()
+  const timeout = globalThis.setTimeout
+  const delays: number[] = []
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: Parameters<typeof setTimeout>[0], delay?: number, ...args: unknown[]) => {
+    if (delay && delay >= 250) delays.push(delay)
+    return timeout(callback, delay && delay >= 250 ? 1 : delay, ...args)
+  }) as typeof setTimeout)
+  try {
+    let reads = 0
+    host.statusHook(async () => {
+      if (++reads <= 7) throw new Error(`transport failure ${reads}`)
+      return status()
+    })
+    host.event()
+    await new Promise((done) => timeout(done, 60))
+    expect(reads).toBe(8)
+    expect(delays).toEqual([250, 500, 1000, 2000, 2000, 2000, 2000])
+    expect(host.toasts.filter((toast) => toast.message.includes("transport failure"))).toHaveLength(1)
+    host.statusHook(async () => { throw new Error("second streak") }); host.event(); await tick()
+    expect(host.toasts.filter((toast) => toast.message.includes("second streak"))).toHaveLength(1)
+  } finally { host.cleanup(); timer.mockRestore() }
+})
+
+test("profile command reports the status error when no snapshot has loaded", async () => {
+  const host = fake(undefined, async () => { throw new Error("no initial status") })
+  await tick(); host.event(); await tick()
+  const before = host.toasts.length
+  await host.run()
+  expect(host.toasts.length).toBe(before + 1)
+  expect(host.toasts.at(-1)?.message).toContain("no initial status")
+  expect(host.calls.map(([name]) => name)).not.toContain("switch")
+  host.cleanup()
+})
+
+test("pending polling continues past five attempts with capped backoff until ready", async () => {
+  const host = fake(); await tick()
+  const timeout = globalThis.setTimeout
+  const delays: number[] = []
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: Parameters<typeof setTimeout>[0], delay?: number, ...args: unknown[]) => {
+    if (delay && delay >= 250) delays.push(delay)
+    return timeout(callback, delay && delay >= 250 ? 1 : delay, ...args)
+  }) as typeof setTimeout)
+  try {
+    let reads = 0
+    host.statusHook(async () => ++reads <= 7 ? status({ phase: "pending", ready: false }) : status())
+    host.event()
+    await new Promise((done) => timeout(done, 60))
+    expect(reads).toBe(8)
+    expect(delays).toEqual([250, 500, 1000, 2000, 2000, 2000, 2000])
+    expect(host.toasts).toEqual([])
+  } finally { host.cleanup(); timer.mockRestore() }
 })
