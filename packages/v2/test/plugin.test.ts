@@ -239,6 +239,86 @@ describe("boot", () => {
 })
 
 describe("rpc", () => {
+  test("readProfiles reads fresh complete documents and rejects corrupt files", async () => {
+    save(file())
+    const host = new FakeHost()
+    await boot(host)
+    expect(await host.call("readProfiles")).toEqual(onDisk())
+    const edited = onDisk()
+    edited.profiles.extra = structuredClone(edited.profiles.glm!)
+    save(edited)
+    expect(await host.call("readProfiles")).toEqual(edited)
+    writeFileSync(path, "{ broken")
+    expect(await host.call("readProfiles")).toMatchObject({ rpcError: true, type: "invalid_profiles" })
+  })
+
+  test("saveProfiles validates drafts and preserves effective state without applying edits", async () => {
+    save(file())
+    const host = new FakeHost()
+    const switcher = await boot(host)
+    const before = onDisk()
+    const profiles = structuredClone(before.profiles)
+    profiles.glm!.heavy.model = "openai/gpt-5"
+    profiles.duplicate = structuredClone(profiles.gpt!)
+    const result = await host.call("saveProfiles", {
+      profiles, active: before.active, expected: { profiles: before.profiles, active: before.active },
+      effective: {},
+    }) as ProfilesFile
+    expect(result).toEqual({ profiles, active: before.active, effective: before.effective })
+    expect(onDisk()).toEqual(result)
+    expect(host.agentReloads).toBe(0)
+    expect(host.agent("build")!.model).toEqual(GLM5)
+    expect(switcher.status().active).toBe("glm")
+    expect(switcher.status().profiles).toContain("duplicate")
+    await host.call("switch", { profile: "glm" })
+    expect(host.agent("build")!.model).toEqual({ providerID: "openai", id: "gpt-5", variant: "max" })
+  })
+
+  test("saveProfiles rejects invalid drafts and never overwrites a corrupt document", async () => {
+    save(file())
+    const host = new FakeHost()
+    await boot(host)
+    const before = readFileSync(path, "utf8")
+    expect(await host.call("saveProfiles", {
+      profiles: { bad: { heavy: { model: "a/b" }, rest: { model: "a/c" }, placements: { build: "specific" }, specifics: {} } },
+      active: "bad",
+    })).toMatchObject({ rpcError: true, type: "invalid_profile" })
+    expect(await host.call("saveProfiles", { profiles: {}, active: "missing" })).toMatchObject({ rpcError: true, type: "invalid_profile" })
+    expect(readFileSync(path, "utf8")).toBe(before)
+    writeFileSync(path, "{ broken")
+    expect(await host.call("saveProfiles", { profiles: {}, active: "" })).toMatchObject({ rpcError: true, type: "invalid_profiles" })
+    expect(readFileSync(path, "utf8")).toBe("{ broken")
+  })
+
+  test("saveProfiles detects a switch or edit made while the wizard was open", async () => {
+    save(file())
+    const host = new FakeHost()
+    await boot(host)
+    const before = onDisk()
+    const switched = host.call("switch", { profile: "gpt" })
+    const saved = host.call("saveProfiles", {
+      profiles: {}, active: "", expected: { profiles: before.profiles, active: before.active },
+    })
+    await switched
+    expect(await saved).toMatchObject({ rpcError: true, type: "conflict" })
+    expect(onDisk().active).toBe("gpt")
+    expect(onDisk().profiles).toEqual(before.profiles)
+  })
+
+  test("deleting the last active profile clears the applied snapshot but retains effective history", async () => {
+    save(file())
+    const host = new FakeHost()
+    const switcher = await boot(host)
+    const before = onDisk()
+    const saved = await host.call("saveProfiles", {
+      profiles: {}, active: "", expected: { profiles: before.profiles, active: before.active },
+    })
+    expect(saved).toEqual({ profiles: {}, active: "", effective: before.effective })
+    expect(switcher.status()).toMatchObject({ active: null, applied: false, reason: "no-active", phase: "ready" })
+    expect(host.agent("build")!.model).toBeUndefined()
+    expect(host.rpc!.emitted).toEqual([{ name: "switched", data: { profile: "", partial: false, fixedByConfig: [] } }])
+  })
+
   test("status answers JSON with null instead of undefined", async () => {
     save(file())
     const host = new FakeHost({ config: { plan: { model: GPT } } })

@@ -1,12 +1,15 @@
 import type { Plugin } from "@opencode/plugin"
+import { isDeepStrictEqual } from "node:util"
 import { planApply } from "../../../src/core/apply-plan.js"
 import {
   readProfiles,
   setActiveProfile,
+  writeProfiles,
   writeEffectiveState,
   type ReadResult,
 } from "../../../src/core/config.js"
 import { defaultProfilesPath } from "../../../src/core/paths.js"
+import { profilesFileSchema } from "../../../src/core/schema.js"
 import {
   defaultModel,
   describeInvalidSlot,
@@ -18,7 +21,7 @@ import {
   type Inspection,
   type ListedAgent,
 } from "./apply.js"
-import { ProfileSwitcherRpc, type Phase, type StatusOutput, type SwitchInput } from "./rpc.js"
+import { ProfileSwitcherRpc, type Phase, type SaveProfilesInput, type StatusOutput, type SwitchInput } from "./rpc.js"
 
 /** The part of the plugin context the switcher drives. */
 export type HostContext = Pick<Plugin.Context, "agent" | "model" | "rpc">
@@ -296,6 +299,62 @@ export async function setupProfileSwitcher(
   }
 
   const registration = await ctx.rpc.register(ProfileSwitcherRpc, {
+    readProfiles: async (_input, context) => {
+      const current = readProfiles(path)
+      if (current.status === "invalid") {
+        return context.error("invalid_profiles", `profiles.json is corrupt: ${current.error}`, null)
+      }
+      return current.profiles
+    },
+    saveProfiles: async (input, context) => serial(async () => {
+      const current = readProfiles(path)
+      if (current.status === "invalid") {
+        return context.error("invalid_profiles", `profiles.json is corrupt: ${current.error}`, null)
+      }
+      const draft = input as SaveProfilesInput
+      if (draft.expected && !isDeepStrictEqual(draft.expected, {
+        profiles: current.profiles.profiles,
+        active: current.profiles.active,
+      })) {
+        return context.error("conflict", "Profiles changed while the wizard was open; reopen it and try again", null)
+      }
+      const parsed = profilesFileSchema.safeParse({
+        profiles: draft.profiles,
+        active: draft.active,
+        effective: current.profiles.effective,
+      })
+      if (!parsed.success) {
+        return context.error("invalid_profile", parsed.error.message, null)
+      }
+      if (parsed.data.active && !Object.hasOwn(parsed.data.profiles, parsed.data.active)) {
+        return context.error("invalid_profile", "The active profile is not defined", null)
+      }
+      writeProfiles(parsed.data, path)
+      if (!parsed.data.active && read.profiles.active) {
+        read = { status: "ok", profiles: parsed.data, path }
+        phase = "pending"
+        inspection = undefined
+        passError = null
+        try {
+          await ctx.model.reload()
+          learned = new Set()
+          await ctx.agent.reload()
+          await settle(await listAgents())
+        } catch (error) {
+          const message = `profiles saved but clearing the active profile failed: ${(error as Error).message}`
+          fail(message)
+          return context.error("reload_failed", message, null)
+        }
+        try {
+          await registration.events.emit("switched", { profile: "", partial: false, fixedByConfig: [] })
+        } catch (error) {
+          log("warn", `switched event not delivered (${(error as Error).message})`)
+        }
+      }
+      // The applied snapshot stays intact until an explicit switch. In
+      // particular, editing an active profile must not change its transforms.
+      return parsed.data
+    }),
     status: async () => status(),
     switch: async (input, context) => {
       const { profile } = input as SwitchInput

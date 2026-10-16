@@ -102,6 +102,27 @@ export interface SwitchInput {
   profile: string
 }
 
+/** Host-neutral profiles document used by the TUI wizard. */
+export interface ProfileJson {
+  heavy: { model: string; variant?: string }
+  rest: { model: string }
+  placements: Record<string, PlacementName>
+  specifics: Record<string, { model: string; variant?: string }>
+}
+
+export interface ProfilesFileJson {
+  profiles: Record<string, ProfileJson>
+  active: string
+  effective: Record<string, { model: string; variant?: string }>
+}
+
+export interface SaveProfilesInput {
+  profiles: Record<string, ProfileJson>
+  active: string
+  /** Snapshot the wizard opened; prevents overwriting a concurrent edit or switch. */
+  expected?: { profiles: Record<string, ProfileJson>; active: string }
+}
+
 export interface SwitchedEvent {
   profile: string
   partial: boolean
@@ -170,9 +191,42 @@ const status = {
 
 const failure = { type: "null" } as const
 
+const profilesDocument = {
+  type: "object",
+  properties: { profiles: { type: "object" }, active: { type: "string" }, effective: { type: "object" } },
+  required: ["profiles", "active", "effective"],
+} as const
+
 export const ProfileSwitcherRpc = Rpc.define({
   id: RPC_ID,
   methods: {
+    /** Read the document on the server; a remote TUI has no filesystem access. */
+    readProfiles: {
+      input: { type: "object" },
+      output: profilesDocument,
+      errors: { invalid_profiles: failure },
+    },
+    /**
+     * Save a wizard draft; `effective` stays server-owned. Applying a nonempty
+     * active profile still needs `switch`; clearing it reloads the empty state.
+     */
+    saveProfiles: {
+      input: {
+        type: "object",
+        properties: {
+          profiles: { type: "object" },
+          active: { type: "string" },
+          expected: {
+            type: "object",
+            properties: { profiles: { type: "object" }, active: { type: "string" } },
+            required: ["profiles", "active"],
+          },
+        },
+        required: ["profiles", "active"],
+      },
+      output: profilesDocument,
+      errors: { invalid_profiles: failure, invalid_profile: failure, conflict: failure, reload_failed: failure },
+    },
     /** The active profile and how it landed on the location's agents. */
     status: {
       input: { type: "object" },
