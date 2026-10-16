@@ -3,7 +3,7 @@ import type { Plugin } from "@opencode/plugin/tui"
 import type { AgentInfo } from "../../../src/core/agent.js"
 import type { ProviderLike } from "../../../src/core/models.js"
 import type { ProfilesFile } from "../../../src/core/schema.js"
-import { configureProfile, editProfile } from "../src/tui-wizard.js"
+import { configureProfile, editProfile, type WizardAgent } from "../src/tui-wizard.js"
 
 type Step = { title: string; result: unknown }
 type Dialog = { title: string; options?: { title: string; value: unknown; description?: string }[]; current?: unknown; value?: string }
@@ -115,12 +115,53 @@ describe("v2 wizard", () => {
     expect(fake.toasts.map((toast) => toast.variant)).toEqual(["error", "error"])
     expect(Object.keys(original.profiles)).toEqual(["current"])
   })
+  test("empty catalog warns and validates manually entered models", async () => {
+    const fake = fakeUI([
+      step("Profile name", "manual"), step("Heavy model (provider/model)", ""),
+      step("Heavy model (provider/model)", "missing-provider"),
+      step("Heavy model (provider/model)", "provider/model#variant"),
+      step("Heavy model (provider/model)", " provider/nested/model "), step("Model variant", ""),
+      step("Rest model (provider/model)", "other/rest"), step("Agent placements (select to cycle)", done),
+      step("Save profile", true), step("Activate profile", true),
+    ])
+    const result = await editProfile(fake.ui, { profiles: {}, active: "", effective: {} }, [{ id: "empty", models: {} }], agents)
+    expect(result!.profiles.manual!.heavy.model).toBe("provider/nested/model")
+    expect(result!.profiles.manual!.rest.model).toBe("other/rest")
+    expect(fake.toasts.map((toast) => toast.variant)).toEqual(["warning", "error", "error", "error", "warning"])
+    expect(fake.pending).toEqual([])
+  })
+  test("manual model entry can be cancelled without changing profiles", async () => {
+    const original = file()
+    const before = structuredClone(original)
+    const fake = fakeUI([step("Heavy model (provider/model)", undefined)])
+    expect(await editProfile(fake.ui, original, [], agents, "current")).toBeUndefined()
+    expect(original).toEqual(before)
+  })
+  test("display names label placements and specific models while retaining agent ids", async () => {
+    const named: WizardAgent[] = agents.map((agent) => ({ ...agent, displayName: agent.name === "worker" ? "Helpful worker" : agent.name }))
+    const fake = fakeUI([
+      step("Heavy model", "live/heavy"), step("Model variant", ""), step("Rest model", "live/rest"),
+      step("Agent placements (select to cycle)", done), step("Specific models", agent),
+      step("Model for Helpful worker (worker)", "live/rest"), step("Model variant", ""),
+      step("Specific models", done), step("Save profile", true),
+    ])
+    const result = await editProfile(fake.ui, file(), providers, named, "current")
+    expect(fake.dialogs[3]!.options?.find((option) => option.title === "Helpful worker (worker)")?.value).toEqual(agent)
+    expect(fake.dialogs[3]!.options?.[0]!.title).toBe("build")
+    expect(fake.dialogs[4]!.options?.[0]!.title).toBe("✓ Helpful worker (worker)")
+    expect(result!.profiles.current!.specifics.worker).toEqual({ model: "live/rest" })
+    expect(result!.profiles.current!.placements["Helpful worker"]).toBeUndefined()
+  })
 })
 
 describe("v2 profile management", () => {
   test("duplicate is complete, independent and inactive", async () => {
     const original = file()
-    const fake = fakeUI([step("Configure profile", "current"), step("current", "Duplicate"), step("Profile name", "copy")])
+    const fake = fakeUI([
+      step("Configure profile", "current"), step("current", "Duplicate"), step("Profile name", "copy"),
+      step("Heavy & rest models", "keep"), step("Agent placements (select to cycle)", done),
+      step("Specific models", done), step("Save profile", true),
+    ])
     const result = await configureProfile(fake.ui, original, providers, agents)
     expect(result!.profiles.copy).toEqual(original.profiles.current)
     expect(result!.active).toBe("current")
@@ -128,6 +169,22 @@ describe("v2 profile management", () => {
     result!.profiles.copy!.specifics.worker!.model = "changed/model"
     expect(original.profiles.current!.specifics.worker!.model).toBe("live/heavy")
     expect(fake.dialogs[2]!.value).toBe("current copy")
+    expect(fake.dialogs[3]!.options?.[0]!.title).toBe("Keep current models")
+    expect(fake.pending).toEqual([])
+  })
+  test("duplicate opens an editable draft and can change models without changing the source", async () => {
+    const original = file()
+    const fake = fakeUI([
+      step("Configure profile", "current"), step("current", "Duplicate"), step("Profile name", "copy"),
+      step("Heavy & rest models", "change"), step("Heavy model", "live/rest"), step("Model variant", ""),
+      step("Rest model", "live/heavy"), step("Agent placements (select to cycle)", done),
+      step("Specific models", done), step("Save profile", true),
+    ])
+    const result = await configureProfile(fake.ui, original, providers, agents)
+    expect(result!.profiles.copy!.heavy).toEqual({ model: "live/rest" })
+    expect(result!.profiles.copy!.rest).toEqual({ model: "live/heavy" })
+    expect(result!.profiles.current).toEqual(original.profiles.current)
+    expect(result!.active).toBe("current")
   })
   test("rename updates active and keeps the full profile", async () => {
     const original = file()
@@ -148,6 +205,8 @@ describe("v2 profile management", () => {
     [step("Configure profile", "current"), step("current", undefined)],
     [step("Configure profile", "current"), step("current", "Rename"), step("Profile name", undefined)],
     [step("Configure profile", "current"), step("current", "Duplicate"), step("Profile name", undefined)],
+    [step("Configure profile", "current"), step("current", "Duplicate"), step("Profile name", "copy"), step("Heavy & rest models", undefined)],
+    [step("Configure profile", "current"), step("current", "Duplicate"), step("Profile name", "copy"), step("Heavy & rest models", "keep"), step("Agent placements (select to cycle)", undefined)],
     [step("Configure profile", "current"), step("current", "Delete"), step("Delete profile", undefined)],
     [step("Configure profile", "current"), step("current", "Delete"), step("Delete profile", false)],
   ]) {
