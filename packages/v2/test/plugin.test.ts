@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ProfilesFile } from "../../../src/core/schema.js"
 import { setupProfileSwitcher, type SwitcherOptions } from "../src/plugin.js"
-import type { StatusOutput } from "../src/rpc.js"
+import type { StatusOutput, SaveProfilesOutput } from "../src/rpc.js"
 import { FakeHost } from "./helpers/host.js"
 
 const GLM5 = { providerID: "zai", id: "glm-5", variant: "max" }
@@ -239,6 +239,86 @@ describe("boot", () => {
 })
 
 describe("rpc", () => {
+  test("readProfiles reads fresh complete documents and rejects corrupt files", async () => {
+    save(file())
+    const host = new FakeHost()
+    await boot(host)
+    expect(await host.call("readProfiles")).toEqual(onDisk())
+    const edited = onDisk()
+    edited.profiles.extra = structuredClone(edited.profiles.glm!)
+    save(edited)
+    expect(await host.call("readProfiles")).toEqual(edited)
+    writeFileSync(path, "{ broken")
+    expect(await host.call("readProfiles")).toMatchObject({ rpcError: true, type: "invalid_profiles" })
+  })
+
+  test("saveProfiles validates drafts and preserves effective state without applying edits", async () => {
+    save(file())
+    const host = new FakeHost()
+    const switcher = await boot(host)
+    const before = onDisk()
+    const profiles = structuredClone(before.profiles)
+    profiles.glm!.heavy.model = "openai/gpt-5"
+    profiles.duplicate = structuredClone(profiles.gpt!)
+    const result = await host.call("saveProfiles", {
+      profiles, active: before.active, expected: { profiles: before.profiles, active: before.active },
+      effective: {},
+    }) as SaveProfilesOutput
+    expect(result).toEqual({ profiles, active: before.active, effective: before.effective, renamed: false })
+    expect(onDisk()).toEqual({ profiles, active: before.active, effective: before.effective })
+    expect(host.agentReloads).toBe(0)
+    expect(host.agent("build")!.model).toEqual(GLM5)
+    expect(switcher.status().active).toBe("glm")
+    expect(switcher.status().profiles).toContain("duplicate")
+    await host.call("switch", { profile: "glm" })
+    expect(host.agent("build")!.model).toEqual({ providerID: "openai", id: "gpt-5", variant: "max" })
+  })
+
+  test("saveProfiles rejects invalid drafts and never overwrites a corrupt document", async () => {
+    save(file())
+    const host = new FakeHost()
+    await boot(host)
+    const before = readFileSync(path, "utf8")
+    expect(await host.call("saveProfiles", {
+      profiles: { bad: { heavy: { model: "a/b" }, rest: { model: "a/c" }, placements: { build: "specific" }, specifics: {} } },
+      active: "bad",
+    })).toMatchObject({ rpcError: true, type: "invalid_profile" })
+    expect(await host.call("saveProfiles", { profiles: {}, active: "missing" })).toMatchObject({ rpcError: true, type: "invalid_profile" })
+    expect(readFileSync(path, "utf8")).toBe(before)
+    writeFileSync(path, "{ broken")
+    expect(await host.call("saveProfiles", { profiles: {}, active: "" })).toMatchObject({ rpcError: true, type: "invalid_profiles" })
+    expect(readFileSync(path, "utf8")).toBe("{ broken")
+  })
+
+  test("saveProfiles detects a switch or edit made while the wizard was open", async () => {
+    save(file())
+    const host = new FakeHost()
+    await boot(host)
+    const before = onDisk()
+    const switched = host.call("switch", { profile: "gpt" })
+    const saved = host.call("saveProfiles", {
+      profiles: {}, active: "", expected: { profiles: before.profiles, active: before.active },
+    })
+    await switched
+    expect(await saved).toMatchObject({ rpcError: true, type: "conflict" })
+    expect(onDisk().active).toBe("gpt")
+    expect(onDisk().profiles).toEqual(before.profiles)
+  })
+
+  test("deleting the last active profile clears the applied snapshot but retains effective history", async () => {
+    save(file())
+    const host = new FakeHost()
+    const switcher = await boot(host)
+    const before = onDisk()
+    const saved = await host.call("saveProfiles", {
+      profiles: {}, active: "", expected: { profiles: before.profiles, active: before.active },
+    })
+    expect(saved).toEqual({ profiles: {}, active: "", effective: before.effective, renamed: false })
+    expect(switcher.status()).toMatchObject({ active: null, applied: false, reason: "no-active", phase: "ready" })
+    expect(host.agent("build")!.model).toBeUndefined()
+    expect(host.rpc!.emitted).toEqual([{ name: "switched", data: { profile: "", partial: false, fixedByConfig: [] } }])
+  })
+
   test("status answers JSON with null instead of undefined", async () => {
     save(file())
     const host = new FakeHost({ config: { plan: { model: GPT } } })
@@ -417,4 +497,74 @@ describe("cleanup", () => {
     expect(host.rpc!.disposed).toBe(true)
     expect(host.transformsDisposed).toBe(2)
   })
+})
+
+test("saving a pure active rename retargets the applied snapshot without reloading", async () => {
+  save(file())
+  const host = new FakeHost()
+  const switcher = await boot(host)
+  const before = onDisk()
+  const profiles = structuredClone(before.profiles)
+  profiles.renamed = profiles.glm!
+  delete profiles.glm
+  expect(await host.call("saveProfiles", { profiles, active: "renamed", expected: { profiles: before.profiles, active: before.active } })).toMatchObject({ renamed: true })
+  expect(host.rpc!.emitted).toEqual([{ name: "switched", data: { profile: "renamed", partial: false, fixedByConfig: [] } }])
+  expect(switcher.status()).toMatchObject({ active: "renamed", phase: "ready", applied: true })
+  expect(host.agentReloads).toBe(0)
+  expect(host.modelReloads).toBe(0)
+  expect(host.agent("build")!.model).toEqual(GLM5)
+  await host.context().agent.reload()
+  expect(host.agent("build")!.model).toEqual(GLM5)
+  expect(onDisk().active).toBe("renamed")
+})
+
+test("renaming an edited active profile leaves its old applied snapshot until switch", async () => {
+  save(file())
+  const host = new FakeHost()
+  const switcher = await boot(host)
+  const before = onDisk()
+  const profiles = structuredClone(before.profiles)
+  profiles.renamed = { ...profiles.glm!, heavy: { model: "openai/gpt-5" } }
+  delete profiles.glm
+  expect(await host.call("saveProfiles", { profiles, active: "renamed" })).toMatchObject({ renamed: false })
+  expect(switcher.status().active).toBe("glm")
+  expect(host.agent("build")!.model).toEqual(GLM5)
+  await host.call("switch", { profile: "renamed" })
+  expect(switcher.status().active).toBe("renamed")
+  expect(host.agent("build")!.model).toEqual({ providerID: "openai", id: "gpt-5" })
+})
+
+test("a rename cannot silently apply an active edit previously saved without switching", async () => {
+  save(file())
+  const host = new FakeHost()
+  const switcher = await boot(host)
+  const before = onDisk()
+  const profiles = structuredClone(before.profiles)
+  profiles.glm!.heavy.model = "openai/gpt-5"
+  await host.call("saveProfiles", { profiles, active: "glm" })
+  profiles.renamed = profiles.glm!
+  delete profiles.glm
+  expect(await host.call("saveProfiles", { profiles, active: "renamed" })).toMatchObject({ renamed: false })
+  expect(switcher.status().active).toBe("glm")
+  expect(host.agentReloads).toBe(0)
+  expect(host.agent("build")!.model).toEqual(GLM5)
+})
+
+test("saving an active rename after a failed pass requires an explicit switch", async () => {
+  save(file())
+  const host = new FakeHost()
+  const switcher = await boot(host)
+  host.failReload = true
+  await host.call("switch", { profile: "glm" })
+  expect(switcher.status().phase).toBe("failed")
+  const before = onDisk()
+  const profiles = structuredClone(before.profiles)
+  profiles.renamed = profiles.glm!
+  delete profiles.glm
+  expect(await host.call("saveProfiles", { profiles, active: "renamed" })).toMatchObject({ renamed: false })
+  expect(switcher.status()).toMatchObject({ phase: "failed", active: "glm" })
+  expect(host.rpc!.emitted).toEqual([])
+  host.failReload = false
+  await host.call("switch", { profile: "renamed" })
+  expect(switcher.status()).toMatchObject({ phase: "ready", active: "renamed", applied: true })
 })

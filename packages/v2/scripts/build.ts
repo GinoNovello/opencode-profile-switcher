@@ -14,7 +14,7 @@ import { join, resolve } from "node:path"
 
 const root = resolve(import.meta.dir, "..")
 const dist = join(root, "dist")
-const entries = ["server", "rpc"]
+const entries = ["server", "rpc", "tui"]
 
 rmSync(dist, { recursive: true, force: true })
 
@@ -23,7 +23,7 @@ const result = await Bun.build({
   outdir: dist,
   target: "node",
   format: "esm",
-  external: ["@opencode/plugin", "zod"],
+  external: ["@opencode/plugin", "zod", "@opentui/core", "@opentui/solid", "solid-js"],
   sourcemap: "linked",
 })
 if (!result.success) {

@@ -1,12 +1,15 @@
 import type { Plugin } from "@opencode/plugin"
+import { isDeepStrictEqual } from "node:util"
 import { planApply } from "../../../src/core/apply-plan.js"
 import {
   readProfiles,
   setActiveProfile,
+  writeProfiles,
   writeEffectiveState,
   type ReadResult,
 } from "../../../src/core/config.js"
 import { defaultProfilesPath } from "../../../src/core/paths.js"
+import { profilesFileSchema } from "../../../src/core/schema.js"
 import {
   defaultModel,
   describeInvalidSlot,
@@ -18,7 +21,7 @@ import {
   type Inspection,
   type ListedAgent,
 } from "./apply.js"
-import { ProfileSwitcherRpc, type Phase, type StatusOutput, type SwitchInput } from "./rpc.js"
+import { ProfileSwitcherRpc, type Phase, type SaveProfilesInput, type StatusOutput, type SwitchInput } from "./rpc.js"
 
 /** The part of the plugin context the switcher drives. */
 export type HostContext = Pick<Plugin.Context, "agent" | "model" | "rpc">
@@ -296,6 +299,87 @@ export async function setupProfileSwitcher(
   }
 
   const registration = await ctx.rpc.register(ProfileSwitcherRpc, {
+    readProfiles: async (_input, context) => {
+      const current = readProfiles(path)
+      if (current.status === "invalid") {
+        return context.error("invalid_profiles", `profiles.json is corrupt: ${current.error}`, null)
+      }
+      return current.profiles
+    },
+    saveProfiles: async (input, context) => serial(async () => {
+      const current = readProfiles(path)
+      if (current.status === "invalid") {
+        return context.error("invalid_profiles", `profiles.json is corrupt: ${current.error}`, null)
+      }
+      const draft = input as SaveProfilesInput
+      if (draft.expected && !isDeepStrictEqual(draft.expected, {
+        profiles: current.profiles.profiles,
+        active: current.profiles.active,
+      })) {
+        return context.error("conflict", "Profiles changed while the wizard was open; reopen it and try again", null)
+      }
+      const parsed = profilesFileSchema.safeParse({
+        profiles: draft.profiles,
+        active: draft.active,
+        effective: current.profiles.effective,
+      })
+      if (!parsed.success) {
+        return context.error("invalid_profile", parsed.error.message, null)
+      }
+      if (parsed.data.active && !Object.hasOwn(parsed.data.profiles, parsed.data.active)) {
+        return context.error("invalid_profile", "The active profile is not defined", null)
+      }
+      // Retarget a pure active rename without reloading identical transforms.
+      const previous = read.profiles
+      const renamed = read.status !== "invalid" && phase === "ready"
+        && previous.active === current.profiles.active
+        && parsed.data.active !== previous.active
+        && !Object.hasOwn(parsed.data.profiles, previous.active)
+        && isDeepStrictEqual(previous.profiles[previous.active], current.profiles.profiles[previous.active])
+        && isDeepStrictEqual(previous.profiles[previous.active], parsed.data.profiles[parsed.data.active])
+        && isDeepStrictEqual(
+          Object.fromEntries(Object.entries(current.profiles.profiles).filter(([name]) => name !== previous.active)),
+          Object.fromEntries(Object.entries(parsed.data.profiles).filter(([name]) => name !== parsed.data.active)),
+        )
+      writeProfiles(parsed.data, path)
+      if (renamed) {
+        const profiles = { ...previous.profiles, [parsed.data.active]: previous.profiles[previous.active]! }
+        delete profiles[previous.active]
+        read = { status: "ok", profiles: { ...previous, active: parsed.data.active, profiles }, path }
+      }
+      if (!parsed.data.active && read.profiles.active) {
+        read = { status: "ok", profiles: parsed.data, path }
+        phase = "pending"
+        inspection = undefined
+        passError = null
+        try {
+          await ctx.model.reload()
+          learned = new Set()
+          await ctx.agent.reload()
+          await settle(await listAgents())
+        } catch (error) {
+          const message = `profiles saved but clearing the active profile failed: ${(error as Error).message}`
+          fail(message)
+          return context.error("reload_failed", message, null)
+        }
+        try {
+          await registration.events.emit("switched", { profile: "", partial: false, fixedByConfig: [] })
+        } catch (error) {
+          log("warn", `switched event not delivered (${(error as Error).message})`)
+        }
+      }
+      // Apart from a pure rename, the applied snapshot stays intact until
+      // an explicit switch: editing an active profile cannot change transforms.
+      if (renamed) {
+        const result = status()
+        try {
+          await registration.events.emit("switched", { profile: parsed.data.active, partial: result.partial, fixedByConfig: result.fixedByConfig })
+        } catch (error) {
+          log("warn", `switched event not delivered (${(error as Error).message})`)
+        }
+      }
+      return { ...parsed.data, renamed }
+    }),
     status: async () => status(),
     switch: async (input, context) => {
       const { profile } = input as SwitchInput
