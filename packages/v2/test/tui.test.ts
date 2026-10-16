@@ -4,7 +4,8 @@ import { jsx } from "@opentui/solid/jsx-runtime"
 import { EventEmitter } from "node:events"
 import type { Plugin } from "@opencode/plugin/tui"
 import { setupTui, switchMessage } from "../src/tui-plugin.js"
-import type { StatusOutput } from "../src/rpc.js"
+import { ProfileSwitcherRpc, type StatusOutput } from "../src/rpc.js"
+import type { RpcClient, RpcEventPayload } from "@opencode/client"
 import type { ProfilesFile } from "../../../src/core/schema.js"
 
 const profile = { heavy: { model: "p/heavy", variant: "max" }, rest: { model: "p/rest" }, placements: {}, specifics: {} }
@@ -22,16 +23,21 @@ function fake(route: { type: string; sessionID?: string } = { type: "session", s
   let stopped = false
   let slotStopped = false
   let state = status()
-  let failure: string | undefined
+  let failure: { type: string; message: string } | undefined
+  let statusHook: (() => Promise<StatusOutput>) | undefined
+  let read = structuredClone(file)
+  let readHook: (() => Promise<ProfilesFile>) | undefined
+  let selectHook: (() => Promise<unknown>) | undefined
+  let switchHook: (() => Promise<void>) | undefined
+  let currentLocation = { directory: "/test" }
   let response: unknown = { kind: "profile", name: "two" }
-  const loc = { directory: "/test" }
   let queue: unknown[] | undefined
-  const rpc = {
-    status: async (_: unknown, options: unknown) => { calls.push(["status", options]); return state },
-    readProfiles: async () => file,
-    switch: async (input: unknown, options: unknown) => { calls.push(["switch", input, options]); if (failure) throw new Error(failure); return { ...state, active: "two" } },
-    saveProfiles: async (input: { profiles: ProfilesFile["profiles"]; active: string }, options: unknown) => { calls.push(["saveProfiles", input, options]); return { ...input, effective: {} } },
-    events: { on: (_: unknown, callback: () => void) => { event = callback; return () => { stopped = true } } },
+  const rpc: RpcClient<typeof ProfileSwitcherRpc> = {
+    status: async (_: unknown, options: unknown) => { calls.push(["status", options]); return statusHook ? await statusHook() : state },
+    readProfiles: async () => readHook ? await readHook() : read,
+    switch: async (input: unknown, options: unknown) => { calls.push(["switch", input, options]); if (failure) throw failure; await switchHook?.(); state = { ...state, phase: "ready", active: (input as { profile: string }).profile }; return state },
+    saveProfiles: async (input, options) => { const draft = input as Pick<ProfilesFile, "profiles" | "active">; calls.push(["saveProfiles", input, options]); read = { ...draft, effective: {} }; state = { ...state, active: draft.active || null }; return read },
+    events: { subscribe: async function* () {}, on: (name, callback) => { event = () => { void callback({ id: "event-test", created: 1, type: "rpc.opencode-profile-switcher.switched", data: { profile: state.active ?? "", partial: false, fixedByConfig: [] }, location: { directory: "/test" } } as RpcEventPayload<typeof ProfileSwitcherRpc, typeof name>) }; return () => { stopped = true } } },
   }
   const ctx = {
     location: undefined,
@@ -40,21 +46,27 @@ function fake(route: { type: string; sessionID?: string } = { type: "session", s
       switchModel: async (input: unknown) => { calls.push(["switchModel", input]) },
     } },
     renderer, theme: { text: { muted: "#888888" } },
-    data: { location: { default: () => loc, agent: {
+    data: { location: { default: () => currentLocation, agent: {
       invalidate: (location: unknown) => { calls.push(["invalidate", location]) },
       sync: async (location: unknown) => { calls.push(["sync", location]) },
       list: () => [{ id: "custom", name: "Display name", mode: "primary", hidden: false }],
     }, provider: { sync: async () => {}, list: () => [{ id: "p", name: "Provider", activation: "enabled" }] },
     model: { sync: async () => {}, list: () => [{ id: "heavy", providerID: "p", name: "Heavy", enabled: true, variants: [{ id: "max" }] }] } } },
     keymap: { layer: (factory: () => { commands: { run: () => Promise<void> }[] }) => { command = factory().commands[0]! } },
-    ui: { router: { current: () => route }, dialog: { select: async () => queue ? queue.shift() : response, prompt: async () => queue?.shift(), confirm: async () => queue?.shift() },
+    ui: { router: { current: () => route }, dialog: { clear: () => { calls.push(["clear"]) }, select: async () => selectHook ? await selectHook() : queue ? queue.shift() : response, prompt: async () => queue?.shift(), confirm: async () => queue?.shift() },
       toast: { show: (toast: { message: string; variant: string }) => toasts.push(toast) },
       slot: (claim: { append: string; render: () => unknown }) => { slot = claim; return () => { slotStopped = true } },
     },
   } as unknown as Plugin.Context
   const cleanup = setupTui(ctx)
   return { calls, toasts, renderer, cleanup, run: async () => command.run(), event: () => event(),
-    state: (value: StatusOutput) => { state = value }, fail: (value: string) => { failure = value },
+    state: (value: StatusOutput) => { state = value }, fail: (type: string) => { failure = { type, message: `Host detail for ${type}` } },
+    statusHook: (value?: () => Promise<StatusOutput>) => { statusHook = value },
+    readHook: (value?: () => Promise<ProfilesFile>) => { readHook = value },
+    selectHook: (value: () => Promise<unknown>) => { selectHook = value },
+    switchHook: (value: () => Promise<void>) => { switchHook = value },
+    location: (value: { directory: string }) => { currentLocation = value },
+    file: (value: ProfilesFile) => { read = value },
     choice: (value: unknown) => { response = value }, choices: (values: unknown[]) => { queue = values }, slot: () => slot, stopped: () => stopped && slotStopped }
 }
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
@@ -88,19 +100,20 @@ describe("v2 /profile", () => {
     const missing = fake(); await tick(); missing.state(status({ agents: [] })); await missing.run()
     expect(missing.calls.map(([name]) => name)).not.toContain("switchModel"); missing.cleanup()
   })
-  for (const code of ["unknown_profile", "invalid_profiles", "reload_failed"]) test(`reports ${code} without moving sessions`, async () => {
+  for (const code of ["unknown_profile", "invalid_profiles", "reload_failed", "conflict", "invalid_profile"]) test(`reports ${code} without moving sessions`, async () => {
     const host = fake(); await tick(); host.fail(code); await host.run()
-    expect(host.toasts.at(-1)).toEqual({ message: `Profile switcher: ${code}`, variant: "error" })
+    expect(host.toasts.at(-1)?.message).toContain(`Host detail for ${code}`)
+    expect(host.toasts.at(-1)?.message).not.toContain("[object Object]")
     expect(host.calls.map(([name]) => name)).not.toContain("sync"); host.cleanup()
   })
   test("cancelled picker has no writes", async () => {
     const host = fake(); await tick(); host.choice(undefined); await host.run()
     expect(host.calls.map(([name]) => name)).not.toContain("switch"); host.cleanup()
   })
-  test("failed boot reports its error and does not allow switching", async () => {
+  test("failed boot reports once and allows switching to retry", async () => {
     const host = fake(); await tick(); host.state(status({ ready: false, phase: "failed", error: "reload unavailable" })); await host.run()
-    expect(host.toasts.at(-1)?.message).toContain("reload unavailable")
-    expect(host.calls.map(([name]) => name)).not.toContain("switch"); host.cleanup()
+    expect(host.toasts.some((toast) => toast.message.includes("reload unavailable"))).toBe(true)
+    expect(host.calls.map(([name]) => name)).toContain("switch"); host.cleanup()
   })
   test("polls pending until ready, refreshes events and resize, and disposes all listeners", async () => {
     const host = fake(); host.state(status({ ready: false, phase: "pending" })); await tick(); host.event(); await tick()
@@ -151,10 +164,121 @@ test("new-profile command maps live models and host agent ids, saves then activa
 
 test("duplicating from configure persists an independent inactive profile without switching", async () => {
   const host = fake(); await tick()
-  host.choices([{ kind: "configure" }, "one", "Duplicate", "copy"]); await host.run()
+  host.choices([{ kind: "configure" }, "one", "Duplicate", "copy", "keep", { kind: "done" }, true]); await host.run()
   const save = host.calls.find(([name]) => name === "saveProfiles")?.[1] as { profiles: ProfilesFile["profiles"]; active: string }
   expect(save.active).toBe("one"); expect(save.profiles.copy).toEqual(profile)
   expect(save.profiles.copy).not.toBe(profile)
   expect(host.calls.map(([name]) => name)).not.toContain("switch")
+  host.cleanup()
+})
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+test("failed status loads indicator definitions and warns once until its failure changes", async () => {
+  const host = fake(); await tick()
+  host.state(status({ phase: "failed", ready: false, error: "reload unavailable" }))
+  host.event(); await tick(); host.renderer.emit("resize"); await tick(); host.event(); await tick()
+  expect(host.toasts.filter((toast) => toast.message.includes("reload unavailable"))).toHaveLength(1)
+  const view = await testRender(() => jsx("box", { children: host.slot().render() }) as never, { width: 80, height: 3 })
+  await view.renderOnce(); expect(view.captureCharFrame()).toContain("one · heavy")
+  host.state(status({ phase: "failed", ready: false, error: "another failure" })); host.event(); await tick()
+  expect(host.toasts.at(-1)?.message).toContain("another failure")
+  host.cleanup(); view.renderer.destroy()
+})
+
+test("a stale in-flight status cannot overwrite a switch and its fresh follow-up", async () => {
+  const host = fake(); await tick()
+  const old = deferred<StatusOutput>()
+  let reads = 0
+  host.selectHook(async () => {
+    host.statusHook(async () => ++reads === 1 ? old.promise : status({ active: "two" }))
+    host.event(); await tick()
+    return { kind: "profile", name: "two" }
+  })
+  await host.run()
+  expect(reads).toBe(2)
+  old.resolve(status({ active: "one" })); await tick()
+  const view = await testRender(() => jsx("box", { children: host.slot().render() }) as never, { width: 80, height: 3 })
+  await view.renderOnce(); expect(view.captureCharFrame()).toContain("two · heavy")
+  host.cleanup(); view.renderer.destroy()
+})
+
+test("pending polling recovers from a transient status failure with backoff", async () => {
+  const host = fake(); await tick()
+  host.state(status({ phase: "pending", ready: false })); host.event(); await tick()
+  let reads = 0
+  host.statusHook(async () => {
+    if (++reads === 1) throw { type: "transport", message: "temporarily unavailable" }
+    return status()
+  })
+  await new Promise((done) => setTimeout(done, 560))
+  expect(reads).toBe(2)
+  host.choice(undefined); await host.run()
+  expect(host.toasts.some((toast) => toast.message.includes("still loading"))).toBe(false)
+  host.cleanup()
+})
+
+for (const effective of [true, false]) test(`clearing active profile updates focused session or explains host null limitation (${effective})`, async () => {
+  const host = fake(); await tick()
+  host.choices([{ kind: "configure" }, "one", "Delete", true])
+  const cleared = status({ active: null, agents: effective ? status().agents : [] })
+  host.statusHook(async () => host.calls.some(([name]) => name === "saveProfiles") ? cleared : status())
+  await host.run()
+  expect(host.calls.map(([name]) => name)).toContain("invalidate")
+  expect(host.calls.filter(([name]) => name === "switchModel")).toHaveLength(effective ? 1 : 0)
+  expect(host.toasts.at(-1)?.message).toContain("Other tabs keep their models")
+  if (!effective) expect(host.toasts.at(-1)?.message).toContain("open session keeps its model until you choose another")
+  host.cleanup()
+})
+
+test("cleanup clears the dialog and a late picker result cannot switch", async () => {
+  const host = fake(); await tick()
+  const dialog = deferred<unknown>(); host.selectHook(() => dialog.promise)
+  const running = host.run(); await tick(); host.cleanup()
+  dialog.resolve({ kind: "profile", name: "two" }); await running
+  expect(host.calls.map(([name]) => name)).toContain("clear")
+  expect(host.calls.map(([name]) => name)).not.toContain("switch")
+})
+
+test("cleanup during the final wizard confirmation prevents saving its late result", async () => {
+  const host = fake(); await tick()
+  const activation = deferred<unknown>()
+  host.choices([{ kind: "new" }, "late", "p/heavy", "max", "p/heavy", { kind: "done" }, true, activation.promise])
+  const running = host.run(); await tick(); host.cleanup()
+  activation.resolve(true); await running
+  expect(host.calls.map(([name]) => name)).not.toContain("saveProfiles")
+  expect(host.calls.map(([name]) => name)).not.toContain("switch")
+})
+
+test("a command captures its location once across selection, RPC and cache refresh", async () => {
+  const host = fake(); await tick()
+  host.selectHook(async () => { host.location({ directory: "/other" }); return { kind: "profile", name: "two" } })
+  await host.run()
+  expect(host.calls.find(([name]) => name === "switch")?.[2]).toEqual({ location: { directory: "/test" } })
+  expect(host.calls.find(([name]) => name === "invalidate")?.[1]).toEqual({ directory: "/test" })
+  expect(host.calls.find(([name]) => name === "sync")?.[1]).toEqual({ directory: "/test" })
+  host.cleanup()
+})
+
+test("pure active rename saves and refreshes without switching or reloading session", async () => {
+  const host = fake(); await tick()
+  host.choices([{ kind: "configure" }, "one", "Rename", "renamed"]); await host.run()
+  expect(host.calls.map(([name]) => name)).toContain("saveProfiles")
+  expect(host.calls.map(([name]) => name)).not.toContain("switch")
+  expect(host.calls.map(([name]) => name)).not.toContain("switchModel")
+  host.cleanup()
+})
+
+test("an empty profile document enters setup directly and seeds host agent defaults", async () => {
+  const host = fake(); await tick()
+  host.file({ profiles: {}, active: "", effective: {} }); host.state(status({ profiles: [], active: null }))
+  host.choices(["first", "p/heavy", "max", "p/heavy", { kind: "done" }, true, false]); await host.run()
+  const save = host.calls.find(([name]) => name === "saveProfiles")?.[1] as ProfilesFile
+  expect(save.profiles.first?.placements).toEqual({ custom: "heavy" })
+  expect(save.active).toBe("")
   host.cleanup()
 })
