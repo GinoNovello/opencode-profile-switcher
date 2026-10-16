@@ -24,8 +24,9 @@ builtin plugins.
 
 The harness verifies:
 
-- Ready boot, built-in heavy models and variants, hidden agents using rest,
-  config overrides at global/repository/markdown scope, and markdown agents
+- Ready boot, build and plan using `big-pickle#high`, explore and hidden agents using rest,
+  with distinct heavy/rest/catalog models, exact config model and variant overrides
+  at global/repository/markdown scope, and markdown agents
   without models inheriting their profile.
 - Live RPC switching, the `switched` event, and unchanged server process.
 - Deleted markdown agents disappearing after the host's filesystem debounce
@@ -42,7 +43,9 @@ The harness verifies:
   factory reevaluations are allowed.
 - A real successful public-model turn with `opencode/big-pickle`, followed by
   an RPC profile switch and `session.switchModel`, and another successful turn
-  using `opencode/space-bunny-free`. Assistant metadata establishes the model
+  using `opencode/space-bunny-free#low`. A session read between RPC reload and
+  `switchModel` asserts that reload preserved `big-pickle#default`. Assistant metadata
+  establishes the model and named variant
   used; response text is deliberately not asserted.
 - `OPENCODE_CONFIG_DIR` selecting the sandbox override's `profiles.json`.
 
@@ -50,24 +53,46 @@ A missing registry network connection prints an explicit `SKIP`. Registry HTTP
 errors, installation errors, server errors, unavailable models, and assertion
 failures fail the command. Public inference can depend on service availability;
 no credentials are substituted when it fails. Installation and requests have
-bounded deadlines. Every owned process and the sandbox are removed on success,
-failure, SIGINT, or SIGTERM. As usual, SIGKILL cannot run cleanup handlers.
+bounded deadlines, including each poll attempt and the version probe. Port bind
+collisions retry with a new reserved loopback port. Children run in private process
+groups; cleanup terminates the whole group, including install descendants whose
+parent already exited, and handles repeated interrupts. Every owned process and
+the sandbox are removed on success, failure, SIGINT, or SIGTERM. As usual, SIGKILL cannot run cleanup handlers.
 
 Set `SMOKE_V2_EVIDENCE=/absolute/path/results.json` to retain scenario snapshots
 outside the sandbox. Failures print the captured server output; TUI failures
 also include recent terminal output. The temporary sandbox is always removed.
 
-The TUI picker, wizard, footer rendering, keyboard navigation, and selecting a
-profile in an already open TUI session remain manual checks. To reproduce those
-checks independently, use the same isolated environment and pinned installation,
+The harness also sends `/profile` through the terminal, waits for the real
+picker dialog, selects alpha with Down/Enter, and asserts RPC active alpha.
+
+The wizard, footer rendering, and switching the focused session from the TUI
+remain manual checks. Use the same isolated environment and pinned installation,
 configure `plugins: ["*", "/path/to/copied/dist"]`, start an authenticated private
 `serve`, and attach that installation's `opencode --server http://127.0.0.1:PORT`.
-Enter `/profile` and select a profile, then verify the footer and next turn in
-the current session. Stop only these private processes afterward.
+Open two sessions or tabs with known models. Focus one, enter `/profile`, and
+select another profile. Verify its footer and next turn use the selected profile,
+then revisit the second session and verify its model did not change (ADR-0005).
+Stop only these private processes afterward.
 
-OpenCode's agent listing preserves an omitted variant as absent and preserves
-an explicit `#default` as `"default"`. Sessions normalize an omitted variant to
-`"default"`; the host treats these as the same effective selection during
-`switchModel`. The switcher's `landed()` comparison intentionally accepts that
-equivalence. A same-model explicit `#default` therefore does not make the profile
-partial, while a different model or named variant does.
+The harness asserts that agent listings preserve an omitted variant as absent
+and explicit `#default` as `"default"`. The matching `pinneddefault` agent has the
+exact rest model with `variant: "default"`, is not fixed by config, and the boot
+has no unapplied agents. This proves the switcher's effective equivalence case.
+It does not exercise the host's internal absent-versus-default comparison inside
+`switchModel`; the successful Big Pickle turn separately asserts session
+normalization.
+
+The named variant `low` is asserted on successful Space Bunny assistant message
+metadata. Big Pickle advertises no named variants: an attempted `high` inference
+failed with `VariantUnavailableError`, so its real turn uses the default and
+asserts `message.model.variant === "default"` for an omitted session variant.
+This verifies selection transport, not the provider's internal reasoning behavior. Other named reasoning variants and the
+interaction with the host's `/models` command remain open manual checks.
+
+The catalog assertions establish which default model wins (profile, global,
+repository). The explanation that `opencode.config.provider` runs in post and
+calls `model.default.set` comes from reading the pinned binary, not a harness
+assertion. Likewise, dropping the heavy variant from the catalog default is the
+switcher's `defaultModel()` implementation decision; the catalog response does
+not expose the selected variant and cannot prove that mechanism.
