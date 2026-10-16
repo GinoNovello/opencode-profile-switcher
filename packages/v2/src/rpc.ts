@@ -116,6 +116,11 @@ export interface ProfilesFileJson {
   effective: Record<string, { model: string; variant?: string }>
 }
 
+/** A saved document, with confirmation that its applied snapshot was retargeted. */
+export interface SaveProfilesOutput extends ProfilesFileJson {
+  renamed: boolean
+}
+
 export interface SaveProfilesInput {
   profiles: Record<string, ProfileJson>
   active: string
@@ -224,7 +229,11 @@ export const ProfileSwitcherRpc = Rpc.define({
         },
         required: ["profiles", "active"],
       },
-      output: profilesDocument,
+      output: {
+        ...profilesDocument,
+        properties: { ...profilesDocument.properties, renamed: { type: "boolean" } },
+        required: [...profilesDocument.required, "renamed"],
+      },
       errors: { invalid_profiles: failure, invalid_profile: failure, conflict: failure, reload_failed: failure },
     },
     /** The active profile and how it landed on the location's agents. */

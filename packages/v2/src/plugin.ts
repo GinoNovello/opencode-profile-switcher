@@ -370,7 +370,15 @@ export async function setupProfileSwitcher(
       }
       // Apart from a pure rename, the applied snapshot stays intact until
       // an explicit switch: editing an active profile cannot change transforms.
-      return parsed.data
+      if (renamed) {
+        const result = status()
+        try {
+          await registration.events.emit("switched", { profile: parsed.data.active, partial: result.partial, fixedByConfig: result.fixedByConfig })
+        } catch (error) {
+          log("warn", `switched event not delivered (${(error as Error).message})`)
+        }
+      }
+      return { ...parsed.data, renamed }
     }),
     status: async () => status(),
     switch: async (input, context) => {

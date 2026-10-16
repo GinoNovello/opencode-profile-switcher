@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ProfilesFile } from "../../../src/core/schema.js"
 import { setupProfileSwitcher, type SwitcherOptions } from "../src/plugin.js"
-import type { StatusOutput } from "../src/rpc.js"
+import type { StatusOutput, SaveProfilesOutput } from "../src/rpc.js"
 import { FakeHost } from "./helpers/host.js"
 
 const GLM5 = { providerID: "zai", id: "glm-5", variant: "max" }
@@ -263,9 +263,9 @@ describe("rpc", () => {
     const result = await host.call("saveProfiles", {
       profiles, active: before.active, expected: { profiles: before.profiles, active: before.active },
       effective: {},
-    }) as ProfilesFile
-    expect(result).toEqual({ profiles, active: before.active, effective: before.effective })
-    expect(onDisk()).toEqual(result)
+    }) as SaveProfilesOutput
+    expect(result).toEqual({ profiles, active: before.active, effective: before.effective, renamed: false })
+    expect(onDisk()).toEqual({ profiles, active: before.active, effective: before.effective })
     expect(host.agentReloads).toBe(0)
     expect(host.agent("build")!.model).toEqual(GLM5)
     expect(switcher.status().active).toBe("glm")
@@ -313,7 +313,7 @@ describe("rpc", () => {
     const saved = await host.call("saveProfiles", {
       profiles: {}, active: "", expected: { profiles: before.profiles, active: before.active },
     })
-    expect(saved).toEqual({ profiles: {}, active: "", effective: before.effective })
+    expect(saved).toEqual({ profiles: {}, active: "", effective: before.effective, renamed: false })
     expect(switcher.status()).toMatchObject({ active: null, applied: false, reason: "no-active", phase: "ready" })
     expect(host.agent("build")!.model).toBeUndefined()
     expect(host.rpc!.emitted).toEqual([{ name: "switched", data: { profile: "", partial: false, fixedByConfig: [] } }])
@@ -507,7 +507,8 @@ test("saving a pure active rename retargets the applied snapshot without reloadi
   const profiles = structuredClone(before.profiles)
   profiles.renamed = profiles.glm!
   delete profiles.glm
-  await host.call("saveProfiles", { profiles, active: "renamed", expected: { profiles: before.profiles, active: before.active } })
+  expect(await host.call("saveProfiles", { profiles, active: "renamed", expected: { profiles: before.profiles, active: before.active } })).toMatchObject({ renamed: true })
+  expect(host.rpc!.emitted).toEqual([{ name: "switched", data: { profile: "renamed", partial: false, fixedByConfig: [] } }])
   expect(switcher.status()).toMatchObject({ active: "renamed", phase: "ready", applied: true })
   expect(host.agentReloads).toBe(0)
   expect(host.modelReloads).toBe(0)
@@ -525,7 +526,7 @@ test("renaming an edited active profile leaves its old applied snapshot until sw
   const profiles = structuredClone(before.profiles)
   profiles.renamed = { ...profiles.glm!, heavy: { model: "openai/gpt-5" } }
   delete profiles.glm
-  await host.call("saveProfiles", { profiles, active: "renamed" })
+  expect(await host.call("saveProfiles", { profiles, active: "renamed" })).toMatchObject({ renamed: false })
   expect(switcher.status().active).toBe("glm")
   expect(host.agent("build")!.model).toEqual(GLM5)
   await host.call("switch", { profile: "renamed" })
@@ -543,8 +544,27 @@ test("a rename cannot silently apply an active edit previously saved without swi
   await host.call("saveProfiles", { profiles, active: "glm" })
   profiles.renamed = profiles.glm!
   delete profiles.glm
-  await host.call("saveProfiles", { profiles, active: "renamed" })
+  expect(await host.call("saveProfiles", { profiles, active: "renamed" })).toMatchObject({ renamed: false })
   expect(switcher.status().active).toBe("glm")
   expect(host.agentReloads).toBe(0)
   expect(host.agent("build")!.model).toEqual(GLM5)
+})
+
+test("saving an active rename after a failed pass requires an explicit switch", async () => {
+  save(file())
+  const host = new FakeHost()
+  const switcher = await boot(host)
+  host.failReload = true
+  await host.call("switch", { profile: "glm" })
+  expect(switcher.status().phase).toBe("failed")
+  const before = onDisk()
+  const profiles = structuredClone(before.profiles)
+  profiles.renamed = profiles.glm!
+  delete profiles.glm
+  expect(await host.call("saveProfiles", { profiles, active: "renamed" })).toMatchObject({ renamed: false })
+  expect(switcher.status()).toMatchObject({ phase: "failed", active: "glm" })
+  expect(host.rpc!.emitted).toEqual([])
+  host.failReload = false
+  await host.call("switch", { profile: "renamed" })
+  expect(switcher.status()).toMatchObject({ phase: "ready", active: "renamed", applied: true })
 })
