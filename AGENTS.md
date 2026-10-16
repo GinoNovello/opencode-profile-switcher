@@ -61,11 +61,10 @@ Single-context: `CONTEXT.md` en la raíz + `docs/adr/` (se crean lazy vía `/dom
 
 ### Post-implementation review
 
-After finishing the implementation of any issue and **before** marking it closed/completed, Orca must orchestrate two reviews in parallel using the skill `@.agents/skills/code-review/SKILL.md`. Both workers must review the complete finished implementation:
+After finishing the implementation of any issue and **before** marking it closed/completed, Orca must orchestrate the post-implementation reviews using the skill `@.agents/skills/code-review/SKILL.md`. Every reviewer must review the complete finished implementation.
 
-Launch review workers through Orca CLI. Before dispatching them, load the `orca-workflow` and `orca-cli` skills and follow their current command guidance; do not invoke reviewer CLIs directly from the coordinator shell.
+The reviewers are specified in the prompt for each task: which agents, how many, and with which model and variant/effort. There is no default set. If the prompt does not name the reviewers, ask before closing the issue.
 
-- OpenCode: use model `zai-coding-plan/glm-5.2` with variant `max`. On opencode 2.x the variant is part of the model string (there is no `--variant` flag), so the CLI invocation must include `opencode run --model 'zai-coding-plan/glm-5.2#max'`. Verify it in the session (`opencode api session.get --param sessionID=<id>` shows `"variant":"max"`); the model's own self-report is not reliable.
-- Claude: use model `claude-opus-5` with effort `medium`. Claude calls this setting effort, not variant; the CLI invocation must include `claude --model claude-opus-5 --effort medium`.
+Launch review workers through Orca CLI. Before dispatching them, load the `orca-workflow` and `orca-cli` skills and follow their current command guidance; do not invoke reviewer CLIs directly from the coordinator shell. If several reviewers are requested, run them in parallel.
 
-Do not rely on either agent's default model or effort. Verify the effective model and variant/effort in each worker session before accepting its report. Resolve all blocking findings before closing the issue.
+Do not rely on any agent's default model or effort. Verify the effective model and variant/effort in each worker session before accepting its report (the model's own self-report is not reliable). On opencode 2.x the variant goes in the model string (`--model provider/model#variant`); there is no `--variant` flag. Resolve all blocking findings before closing the issue.
