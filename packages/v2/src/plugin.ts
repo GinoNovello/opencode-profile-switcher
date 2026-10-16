@@ -329,7 +329,24 @@ export async function setupProfileSwitcher(
       if (parsed.data.active && !Object.hasOwn(parsed.data.profiles, parsed.data.active)) {
         return context.error("invalid_profile", "The active profile is not defined", null)
       }
+      // Retarget a pure active rename without reloading identical transforms.
+      const previous = read.profiles
+      const renamed = read.status !== "invalid" && phase === "ready"
+        && previous.active === current.profiles.active
+        && parsed.data.active !== previous.active
+        && !Object.hasOwn(parsed.data.profiles, previous.active)
+        && isDeepStrictEqual(previous.profiles[previous.active], current.profiles.profiles[previous.active])
+        && isDeepStrictEqual(previous.profiles[previous.active], parsed.data.profiles[parsed.data.active])
+        && isDeepStrictEqual(
+          Object.fromEntries(Object.entries(current.profiles.profiles).filter(([name]) => name !== previous.active)),
+          Object.fromEntries(Object.entries(parsed.data.profiles).filter(([name]) => name !== parsed.data.active)),
+        )
       writeProfiles(parsed.data, path)
+      if (renamed) {
+        const profiles = { ...previous.profiles, [parsed.data.active]: previous.profiles[previous.active]! }
+        delete profiles[previous.active]
+        read = { status: "ok", profiles: { ...previous, active: parsed.data.active, profiles }, path }
+      }
       if (!parsed.data.active && read.profiles.active) {
         read = { status: "ok", profiles: parsed.data, path }
         phase = "pending"
@@ -351,8 +368,8 @@ export async function setupProfileSwitcher(
           log("warn", `switched event not delivered (${(error as Error).message})`)
         }
       }
-      // The applied snapshot stays intact until an explicit switch. In
-      // particular, editing an active profile must not change its transforms.
+      // Apart from a pure rename, the applied snapshot stays intact until
+      // an explicit switch: editing an active profile cannot change transforms.
       return parsed.data
     }),
     status: async () => status(),

@@ -498,3 +498,53 @@ describe("cleanup", () => {
     expect(host.transformsDisposed).toBe(2)
   })
 })
+
+test("saving a pure active rename retargets the applied snapshot without reloading", async () => {
+  save(file())
+  const host = new FakeHost()
+  const switcher = await boot(host)
+  const before = onDisk()
+  const profiles = structuredClone(before.profiles)
+  profiles.renamed = profiles.glm!
+  delete profiles.glm
+  await host.call("saveProfiles", { profiles, active: "renamed", expected: { profiles: before.profiles, active: before.active } })
+  expect(switcher.status()).toMatchObject({ active: "renamed", phase: "ready", applied: true })
+  expect(host.agentReloads).toBe(0)
+  expect(host.modelReloads).toBe(0)
+  expect(host.agent("build")!.model).toEqual(GLM5)
+  await host.context().agent.reload()
+  expect(host.agent("build")!.model).toEqual(GLM5)
+  expect(onDisk().active).toBe("renamed")
+})
+
+test("renaming an edited active profile leaves its old applied snapshot until switch", async () => {
+  save(file())
+  const host = new FakeHost()
+  const switcher = await boot(host)
+  const before = onDisk()
+  const profiles = structuredClone(before.profiles)
+  profiles.renamed = { ...profiles.glm!, heavy: { model: "openai/gpt-5" } }
+  delete profiles.glm
+  await host.call("saveProfiles", { profiles, active: "renamed" })
+  expect(switcher.status().active).toBe("glm")
+  expect(host.agent("build")!.model).toEqual(GLM5)
+  await host.call("switch", { profile: "renamed" })
+  expect(switcher.status().active).toBe("renamed")
+  expect(host.agent("build")!.model).toEqual({ providerID: "openai", id: "gpt-5" })
+})
+
+test("a rename cannot silently apply an active edit previously saved without switching", async () => {
+  save(file())
+  const host = new FakeHost()
+  const switcher = await boot(host)
+  const before = onDisk()
+  const profiles = structuredClone(before.profiles)
+  profiles.glm!.heavy.model = "openai/gpt-5"
+  await host.call("saveProfiles", { profiles, active: "glm" })
+  profiles.renamed = profiles.glm!
+  delete profiles.glm
+  await host.call("saveProfiles", { profiles, active: "renamed" })
+  expect(switcher.status().active).toBe("glm")
+  expect(host.agentReloads).toBe(0)
+  expect(host.agent("build")!.model).toEqual(GLM5)
+})
