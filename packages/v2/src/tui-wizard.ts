@@ -65,7 +65,7 @@ export async function editProfile(ui: UI, file: ProfilesFile, providers: Provide
   let keep = false
   if (offerKeep && original) {
     const choice = await ui.dialog.select({ title: "Heavy & rest models", options: [
-      { title: "Keep current models", value: "keep", description: `heavy: ${original.heavy.model} · rest: ${original.rest.model}` },
+      { title: "Keep current models", value: "keep", description: `heavy: ${original.heavy.model}${original.heavy.variant ? ` (${original.heavy.variant})` : ""} · rest: ${original.rest.model}` },
       { title: "Change models…", value: "change" },
     ] })
     if (choice === undefined) return

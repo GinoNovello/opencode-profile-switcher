@@ -219,3 +219,15 @@ describe("v2 profile management", () => {
     })
   }
 })
+
+test("keeping current models describes and preserves the heavy variant", async () => {
+  const original = file()
+  const fake = fakeUI([
+    step("Configure profile", "current"), step("current", "Duplicate"), step("Profile name", "copy"),
+    step("Heavy & rest models", "keep"), step("Agent placements (select to cycle)", done),
+    step("Specific models", done), step("Save profile", true),
+  ])
+  const result = await configureProfile(fake.ui, original, providers, agents)
+  expect(fake.dialogs.find((dialog) => dialog.title === "Heavy & rest models")?.options?.find((option) => option.value === "keep")?.description).toBe("heavy: live/heavy (max) · rest: live/rest")
+  expect(result!.profiles.copy!.heavy).toEqual({ model: "live/heavy", variant: "max" })
+})
