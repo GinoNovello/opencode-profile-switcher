@@ -43,6 +43,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:smoke:v2": "bun run build:v2 && bun run scripts/smoke-v2.ts",
     "test:smoke": "bun run build && bun test ./test/live-switch.smoke.ts",
     "typecheck:v2": "bun run --cwd packages/v2 typecheck",
     "test:v2": "bun run --cwd packages/v2 test",
