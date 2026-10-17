@@ -23,7 +23,9 @@ Installing it by package name has not been tested yet:
 }
 ```
 
-**From a local build (tested).** This is the setup the smoke harness runs:
+**From a local build (tested).** This is the same way of loading the plugin
+(`plugins` pointing at a local `dist`) that the smoke harness verifies in its
+own sandbox:
 
 ```sh
 git clone https://github.com/GinoNovello/opencode-profile-switcher
