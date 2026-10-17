@@ -15,17 +15,25 @@ name: release
 #     v1 — `opencode-profile-switcher` (repo root), for opencode 1.x.
 #     v2 — `opencode-profile-switcher-v2` (packages/v2), for opencode 2.x.
 #
-#   channel — which npm dist-tag to publish to.
+#   channel — which npm dist-tag to publish to. Anything other than `latest`
+#   or `next` fails before bumping (empty means `latest`).
 #     latest — a patch bump (0.1.7 -> 0.1.8) published to the `latest` dist-tag.
 #              This is what users installing the plugin normally get.
 #     next   — a prerelease bump (0.1.7 -> 0.1.8-next.0) published to the `next`
-#              dist-tag only. `latest` keeps pointing at the last stable release,
-#              so normal installs are untouched. Use it to get a build onto npm
-#              for runtime verification: opencode only loads the `./tui` export
-#              from a published package, so the TUI half of this plugin cannot be
-#              exercised locally. Install it with `@next` to test.
+#              dist-tag only. Once the package exists on npm, `latest` keeps
+#              pointing at the last stable release, so normal installs are
+#              untouched. Use it to try the published package before a stable
+#              release. For 1.x this is also the only way to exercise the TUI
+#              half: opencode 1.x loads `./tui` only from a published package.
+#              The v2 TUI can already be loaded from a local `dist` (see
+#              docs/testing-v2.md).
 #
-#   gh workflow run release.yml -f package=v2 -f channel=next
+# First publish of a package: a package that is not on npm yet has no stable
+# release for `next` to leave `latest` on, so its first publish must use
+# `channel=latest`; `next` fails before bumping. Every run bumps before
+# publishing, so the first v2 release will be 0.1.1 (0.1.0 is never published):
+#
+#   gh workflow run release.yml -f package=v2 -f channel=latest
 #
 # Git tags differ per package so they never collide:
 #   v1 — `v<version>` (e.g. `v0.1.9`), the scheme used since the first release.
@@ -33,6 +41,16 @@ name: release
 #        `opencode-profile-switcher-v2@0.1.1`): the npm package name plus the
 #        version, so the tag says which package it belongs to and can never be
 #        mistaken for a 1.x `v*` tag.
+#
+# The release commit and tag are pushed before `npm publish`, so a failed push
+# never publishes. If the push succeeds and `npm publish` fails, the commit and
+# tag stay on main without a package on npm. Do NOT dispatch again: that would
+# bump to the next version and skip this one. Publish the tagged version by
+# hand instead; the failed run prints the exact commands. In short:
+#
+#   git fetch --tags && git checkout <tag>
+#   bun install
+#   cd <package dir> && npm publish --access public [--tag next]
 #
 # Setup required once: add a repo secret NPM_TOKEN (npm > Access Tokens >
 # Automation token). Without it, CI still runs, but a publish run fails before
@@ -50,7 +68,7 @@ on:
         options: [v1, v2]
         default: v1
       channel:
-        description: "npm dist-tag to publish to"
+        description: "npm dist-tag to publish to (a package's first publish must be latest)"
         type: choice
         options: [latest, next]
         default: latest
@@ -109,9 +127,60 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
+
+          case "$CHANNEL" in
+            "" | latest)
+              CHANNEL=latest
+              BUMP=(patch)
+              PUBLISH=(--access public)
+              ;;
+            next)
+              # 0.1.7 -> 0.1.8-next.0, and a second run -> 0.1.8-next.1.
+              BUMP=(prerelease --preid next)
+              # --tag next leaves the `latest` dist-tag where it is, so a plain
+              # `npm i <package>` is unaffected (see the first-publish check).
+              PUBLISH=(--access public --tag next)
+              ;;
+            *)
+              echo "::error::Unknown channel '$CHANNEL' (expected latest or next); nothing was bumped or published."
+              exit 1
+              ;;
+          esac
+
+          case "$PACKAGE" in
+            v1)
+              NAME=opencode-profile-switcher
+              DIR=.
+              ;;
+            v2)
+              NAME=opencode-profile-switcher-v2
+              DIR=packages/v2
+              ;;
+            *)
+              echo "::error::Unknown package '$PACKAGE' (expected v1 or v2); nothing was bumped or published."
+              exit 1
+              ;;
+          esac
+
           if [ -z "$NPM_TOKEN" ]; then
             echo "::error::NPM_TOKEN is not set; nothing was bumped or published."
             exit 1
+          fi
+
+          # A package that is not on npm yet has no stable release for `next`
+          # to leave `latest` on: its first publish must go to `latest`. Only a
+          # 404 means "not published yet"; any other registry error stops here.
+          if ! VIEW=$(npm view "$NAME" version 2>&1); then
+            if ! grep -q "E404" <<<"$VIEW"; then
+              echo "$VIEW"
+              echo "::error::Could not query npm for $NAME; nothing was bumped or published."
+              exit 1
+            fi
+            if [ "$CHANNEL" = "next" ]; then
+              echo "::error::$NAME is not on npm yet. Its first publish must use channel=latest; nothing was bumped or published."
+              exit 1
+            fi
+            echo "::notice::$NAME is not on npm yet; this run is its first publish."
           fi
 
           # `bun install` can rewrite bun.lock; discard that drift so the tree is
@@ -120,24 +189,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [ "$CHANNEL" = "next" ]; then
-            # 0.1.7 -> 0.1.8-next.0, and a second run -> 0.1.8-next.1.
-            BUMP=(prerelease --preid next)
-            # --tag next leaves the `latest` dist-tag pointing at the last
-            # stable release, so a plain `npm i <package>` is unaffected.
-            PUBLISH=(--access public --tag next)
-          else
-            BUMP=(patch)
-            PUBLISH=(--access public)
-          fi
-
           case "$PACKAGE" in
             v1)
               # The root is the git root, so `npm version` commits and tags
               # `v<version>` itself. It only touches the root package.json.
               npm version "${BUMP[@]}" -m "chore(release): v%s [skip ci]"
-              git push --follow-tags
-              npm publish "${PUBLISH[@]}"
+              VERSION=$(node -p 'require("./package.json").version')
+              TAG="v$VERSION"
               ;;
             v2)
               cd packages/v2
@@ -149,23 +207,45 @@ jobs:
               TAG="opencode-profile-switcher-v2@$VERSION"
               # bun.lock records the workspace version; update just that line
               # instead of re-running `bun install`, which could add the drift
-              # discarded above to the release commit.
+              # discarded above to the release commit. The lock must hold
+              # exactly one v2 version before and after, and it must be the
+              # new one; otherwise stop before committing.
               # shellcheck disable=SC2016 # JS source, not shell expansions.
               node -e '
                 const fs = require("fs")
-                const lock = fs.readFileSync("../../bun.lock", "utf8")
-                const re = /("name": "opencode-profile-switcher-v2",\s*"version": ")[^"]*(")/
-                if (!re.test(lock)) throw new Error("v2 workspace version not found in bun.lock")
-                fs.writeFileSync("../../bun.lock", lock.replace(re, `$1${process.argv[1]}$2`))
+                const file = "../../bun.lock"
+                const version = process.argv[1]
+                const re = /("name": "opencode-profile-switcher-v2",\s*"version": ")([^"]*)(")/g
+                const versions = (text) => [...text.matchAll(re)].map((match) => match[2])
+                const fail = (message) => {
+                  console.error(`::error::${message}; nothing was committed or published.`)
+                  process.exit(1)
+                }
+                const before = versions(fs.readFileSync(file, "utf8"))
+                if (before.length !== 1) {
+                  fail(`expected one v2 workspace version in bun.lock, found ${before.length}`)
+                }
+                fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(re, `$1${version}$3`))
+                const after = versions(fs.readFileSync(file, "utf8"))
+                if (after.length !== 1 || after[0] !== version) {
+                  fail(`bun.lock v2 workspace version is ${after.join(", ")}, expected ${version}`)
+                }
               ' "$VERSION"
               git add package.json ../../bun.lock
               git commit -m "chore(release): $TAG [skip ci]"
               git tag -a "$TAG" -m "$TAG"
-              git push --follow-tags
-              npm publish "${PUBLISH[@]}"
-              ;;
-            *)
-              echo "::error::Unknown package '$PACKAGE'."
-              exit 1
+              cd ../..
               ;;
           esac
+
+          git push --follow-tags
+
+          if ! (cd "$DIR" && npm publish "${PUBLISH[@]}"); then
+            echo "::error::$TAG was pushed to main but npm publish of $NAME@$VERSION failed. Do not dispatch again (it would skip $VERSION); publish $TAG by hand as shown in the log."
+            echo "To publish $NAME@$VERSION from the tagged commit, with an npm token for $NAME:"
+            echo "  git fetch --tags && git checkout '$TAG'"
+            echo "  bun install"
+            if [ "$DIR" != "." ]; then echo "  cd $DIR"; fi
+            echo "  npm publish ${PUBLISH[*]}"
+            exit 1
+          fi
