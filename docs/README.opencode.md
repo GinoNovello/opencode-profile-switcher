@@ -12,12 +12,20 @@ hand-editing config or restarting for each switch.
 | | |
 | --- | --- |
 | **Package** | `opencode-profile-switcher` (npm) |
-| **Requires** | [opencode](https://opencode.ai) **1.x, >= 1.18.11** (not compatible with opencode 2.0 yet) |
+| **Requires** | [opencode](https://opencode.ai) **1.x, >= 1.18.11** (for OpenCode 2.x see [below](#opencode-2x-experimental)) |
 | **Repo** | https://github.com/GinoNovello/opencode-profile-switcher |
 | **License** | MIT |
 
 **Prerequisite:** at least one LLM provider connected (`/connect`) so the setup
 wizard can offer real models.
+
+**Check the opencode version first** (`opencode --version`). 1.x and 2.x need
+different packages; installing the wrong one does not work:
+
+| opencode | Package | Follow |
+| --- | --- | --- |
+| 1.x, >= 1.18.11 | `opencode-profile-switcher` | [Preferred installation](#preferred-installation) below |
+| 2.x, >= 2.0.29 | `opencode-profile-switcher-v2` (**experimental**) | [OpenCode 2.x](#opencode-2x-experimental) |
 
 ## Preferred installation
 
@@ -65,6 +73,61 @@ Merge into any existing `plugin` array; do not replace other plugins.
 
 **3.** Quit and restart opencode, then run `/profile`.
 
+## OpenCode 2.x (experimental)
+
+`opencode-profile-switcher-v2` (source and package README:
+[`packages/v2`](https://github.com/GinoNovello/opencode-profile-switcher/tree/main/packages/v2),
+[`packages/v2/README.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/packages/v2/README.md))
+is tested only against OpenCode **2.0.29**. It is **not on npm yet**, so
+installing it by package name is untested. The tested setup is a local build:
+
+```sh
+git clone https://github.com/GinoNovello/opencode-profile-switcher
+cd opencode-profile-switcher
+bun install
+bun run build:v2
+```
+
+Add the build's `dist` **directory** (it has `server.js` and `tui.js` at its
+root; not the package root, not a single file) to `plugins` in
+`~/.config/opencode/opencode.jsonc`. Keep `"*"` so OpenCode's built-in plugins
+stay loaded, and merge into any existing `plugins` array:
+
+```jsonc
+{
+  "plugins": ["*", "/absolute/path/to/opencode-profile-switcher/packages/v2/dist"]
+}
+```
+
+Restart OpenCode, then run `/profile`. That single entry loads both the server
+and the TUI half; no `tui.json` or `cli.json` entry is needed.
+
+**`profiles.json` on 2.x:** `$OPENCODE_CONFIG_DIR/profiles.json` when
+`OPENCODE_CONFIG_DIR` is set, otherwise the same path as 1.x. The 1.x package
+ignores `OPENCODE_CONFIG_DIR`, so with that variable set the two packages read
+**different** files.
+
+**Differs from 1.x** (details in the
+[human README](https://github.com/GinoNovello/opencode-profile-switcher#differences-in-opencode-2x)):
+
+- A `model` set in the user's opencode config (global, repository, or a
+  markdown agent's frontmatter) wins over the profile; the switch toast lists
+  those agents and the indicator shows `· parcial`. `excluded` has no effect on
+  them.
+- A switch updates the agents and the **focused session** only; other open
+  sessions keep their model.
+- No `small_model`: `rest` goes to the hidden agents (`title`, `summary`,
+  `compaction`). The default model follows `heavy` without its variant.
+- `provider/model#variant` inside `profiles.json` is invalid and not applied;
+  use the separate `variant` field.
+- A corrupt `profiles.json` shows an error toast; `/profile` does not offer the
+  wizard.
+
+**Not verified on 2.x:** the wizard, footer rendering and focused-session
+switch from the TUI are manual checks; so are named variants beyond the
+harness's, interaction with `/models`, npm install, and versions other than
+2.0.29 ([`docs/testing-v2.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/docs/testing-v2.md)).
+
 ## Anti-patterns (do not)
 
 | Wrong | Why it fails |
@@ -73,6 +136,7 @@ Merge into any existing `plugin` array; do not replace other plugins.
 | Package only in `opencode.json` | Config hook loads; **`/profile` does not** |
 | Skip restart after install | Running sessions keep already-loaded config |
 | `git+https://…` install specs | Unsupported; use the npm package name |
+| `opencode-profile-switcher` on OpenCode 2.x | 1.x plugins do not load on 2.x; use the v2 build |
 
 ## Minimal usage
 
@@ -82,11 +146,11 @@ Merge into any existing `plugin` array; do not replace other plugins.
 3. **Later:** pick a profile to switch live, or **＋ New profile** /
    **⚙ Configure…**.
 
-A switch applies models to `model`, `small_model`, and every assigned agent,
-then reloads in place — sessions survive; no restart needed for the switch
-itself.
+On 1.x, a switch applies models to `model`, `small_model`, and every assigned
+agent, then reloads in place — sessions survive; no restart needed for the
+switch itself. (2.x: see [OpenCode 2.x](#opencode-2x-experimental).)
 
-**TUI caveat:** a model chosen manually in opencode's model picker is kept in
+**TUI caveat (1.x):** a model chosen manually in opencode's model picker is kept in
 TUI memory per agent and has priority over the profile after an in-place
 re-bootstrap. If a manual choice is masking the active profile, restart the TUI
 to clear it.
@@ -101,7 +165,8 @@ to clear it.
 be placed differently in each profile. Agents absent from the active profile
 fall back to `rest`.
 
-**On disk:** `~/.config/opencode/profiles.json` (wizard writes it):
+**On disk:** `~/.config/opencode/profiles.json` (wizard writes it; on 2.x,
+`$OPENCODE_CONFIG_DIR/profiles.json` when that is set):
 
 ```json
 {
@@ -136,9 +201,12 @@ the first start after upgrading.
 | `./server` | `opencode.json` / `.jsonc` | Apply active profile on boot |
 | `./tui` | `tui.json` | Register `/profile` |
 
-Both targets are required for full functionality.
+Both targets are required for full functionality on 1.x (on 2.x the single
+`plugins` entry covers both).
 
 ## Updating
+
+1.x:
 
 ```sh
 opencode plugin opencode-profile-switcher --global
@@ -146,6 +214,9 @@ opencode plugin opencode-profile-switcher --global
 
 Restart opencode after updating. Keep both config entries pointing at
 `opencode-profile-switcher` if you manage them manually.
+
+On 2.x (local build): `git pull`, `bun run build:v2` in the clone, then restart
+OpenCode.
 
 ## Troubleshooting
 
@@ -157,7 +228,10 @@ Restart opencode after updating. Keep both config entries pointing at
 | Switch saved but not live | Restart opencode (live reload may have failed) |
 | Active profile is not the displayed model | Restart the TUI to clear a manual model choice |
 | Unknown model / provider | Switch still applies and warns; `/connect` |
-| Corrupt `profiles.json` | `/profile` offers wizard (overwrites file) |
+| Corrupt `profiles.json` | `/profile` offers wizard (overwrites file); on 2.x it shows an error, fix the file by hand |
+| 2.x: profiles missing or different from 1.x | `OPENCODE_CONFIG_DIR` is set; 2.x reads `profiles.json` from there |
+| 2.x: an agent ignores the profile | Its `model` is set in opencode config or frontmatter (indicator shows `· parcial`) |
+| 2.x: other tabs kept the old model | Expected; only the focused session switches |
 
 ## Help
 

@@ -14,9 +14,16 @@ Built for people who mix providers (e.g. xAI + GLM) and otherwise have to change
 > ([raw](https://raw.githubusercontent.com/GinoNovello/opencode-profile-switcher/main/docs/README.opencode.md)).
 > It has everything needed to install and verify this plugin from a single Markdown file.
 
-Requires **opencode 1.x (>= 1.18.11)**. It does not work with opencode 2.0
-yet: 2.0 changed the plugin API, and support will ship as a separate package
-(tracked in [#36](https://github.com/GinoNovello/opencode-profile-switcher/issues/36)).
+OpenCode 1.x and 2.x have incompatible plugin APIs, so there are two packages
+built from this repository ([ADR-0004](./docs/adr/0004-v2-se-publica-como-paquete-hermano.md)).
+Install the one that matches your opencode version:
+
+| opencode | Package | Status |
+| --- | --- | --- |
+| 1.x, >= 1.18.11 | `opencode-profile-switcher` | Stable, on npm |
+| 2.x, >= 2.0.29 | `opencode-profile-switcher-v2` | **Experimental**, not on npm yet — see [OpenCode 2.x](#opencode-2x-experimental) |
+
+### opencode 1.x
 
 Install the plugin globally with opencode's plugin installer:
 
@@ -51,6 +58,40 @@ Adding the package only to `opencode.json` loads the config hook but does not
 register the `/profile` command. Installing it with `bun add` alone also does
 not register either entrypoint with opencode.
 
+### OpenCode 2.x (experimental)
+
+`opencode-profile-switcher-v2` lives in [`packages/v2`](./packages/v2) (package
+README: [`packages/v2/README.md`](./packages/v2/README.md)). It is tested only
+against OpenCode **2.0.29** (`bun run test:smoke:v2`, see
+[`docs/testing-v2.md`](./docs/testing-v2.md)). It is not published to npm yet,
+so installing it by package name has not been tested; the tested setup is a
+local build:
+
+```sh
+git clone https://github.com/GinoNovello/opencode-profile-switcher
+cd opencode-profile-switcher
+bun install
+bun run build:v2
+```
+
+Then list the build's `dist` directory under `plugins` in
+`~/.config/opencode/opencode.jsonc`. OpenCode 2.0.29 expects a local plugin to
+be a directory with `server.js` and `tui.js` at its root, so point at `dist`
+itself, not the package root. `"*"` keeps OpenCode's built-in plugins:
+
+```jsonc
+{
+  "plugins": ["*", "/absolute/path/to/opencode-profile-switcher/packages/v2/dist"]
+}
+```
+
+Restart OpenCode and run `/profile`. The TUI half (`/profile`, indicator) loads
+from that one `plugins` entry; no `tui.json` or `cli.json` entry is needed, and
+also listing it in `cli.json` does not register `/profile` twice.
+
+v2 behaves differently from 1.x in a few places; see
+[Differences in OpenCode 2.x](#differences-in-opencode-2x).
+
 ## Usage
 
 Run **`/profile`** in opencode:
@@ -65,11 +106,12 @@ Run **`/profile`** in opencode:
   designations) but asks for fresh `heavy`/`rest` models and fresh direct models
   for every `specific` agent.
 
-Switching a profile applies its models to `model`, `small_model` and every agent,
-then reloads the running instance in place — your open sessions survive and no
-manual restart is needed.
+On opencode 1.x, switching a profile applies its models to `model`,
+`small_model` and every agent, then reloads the running instance in place —
+your open sessions survive and no manual restart is needed. OpenCode 2.x
+switches differently (see [Differences in OpenCode 2.x](#differences-in-opencode-2x)).
 
-> **TUI model overrides:** if you manually select a model in opencode's model
+> **TUI model overrides (1.x):** if you manually select a model in opencode's model
 > picker, that per-agent choice stays in TUI memory and takes priority over the
 > profile after an in-place re-bootstrap. Restart the TUI to clear the manual
 > choice and use the active profile again. Switching works normally when no
@@ -100,8 +142,10 @@ the active profile's placements falls back to `rest` and is reported.
 
 ## Configuration
 
-Profiles live in `~/.config/opencode/profiles.json`. The wizard writes it for you,
-but you can also edit it by hand:
+Profiles live in `~/.config/opencode/profiles.json` (under `$XDG_CONFIG_HOME`
+when it is set). On OpenCode 2.x, `OPENCODE_CONFIG_DIR` takes precedence — see
+[Where `profiles.json` lives](#where-profilesjson-lives). The wizard writes it
+for you, but you can also edit it by hand:
 
 ```json
 {
@@ -168,21 +212,98 @@ the first start after upgrading (applying the active profile records `effective`
 state). A `0.1.2` file that fails validation is reported as corrupt and left
 untouched, exactly like any other invalid `profiles.json`.
 
+## Differences in OpenCode 2.x
+
+`opencode-profile-switcher-v2` shares its core with 1.x: the same profiles,
+tiers, placements and `profiles.json` format, and the same picker and wizard
+logic behind `/profile`. What changes:
+
+### Where `profiles.json` lives
+
+v2 reads `$OPENCODE_CONFIG_DIR/profiles.json` when `OPENCODE_CONFIG_DIR` is
+set, because OpenCode 2.x reads its config from that directory. 1.x ignores the
+variable and always uses `~/.config/opencode/profiles.json` (or
+`$XDG_CONFIG_HOME/opencode/profiles.json`). With `OPENCODE_CONFIG_DIR` set, the
+two packages therefore read **different files**: profiles created from one host
+do not show up in the other. Without it, both use the same file.
+
+### Your opencode config wins over the profile
+
+In 2.x the host applies its agent config after plugins, so an agent whose
+`model` is set in your global config, your repository config or a markdown
+agent's frontmatter keeps that model ([ADR-0003](./docs/adr/0003-v2-config-del-usuario-gana-y-se-avisa.md)).
+The profile is still applied to every other agent; the switch toast lists the
+agents fixed by config and the indicator adds `· parcial`. An `excluded`
+placement only has an effect on agents that are not fixed by config. The same
+goes for the default model: a `model` in your global or repository config beats
+the profile's.
+
+### A switch reaches the focused session only
+
+In 2.x the model belongs to each session. `/profile` updates the agents (new
+sessions and subagents) and switches the model of the session you are in; other
+open sessions and tabs keep theirs, and the toast says so
+([ADR-0005](./docs/adr/0005-v2-switch-en-vivo-alcanza-la-sesion-enfocada.md)).
+Nothing is restarted.
+
+### No `small_model`
+
+OpenCode 2.x has no `small_model`. The `rest` tier is applied to its hidden
+agents (`title`, `summary`, `compaction`) like to any other agent. `heavy` sets
+the default model, but without its variant (the host's default model takes
+none); the variant still reaches the agents placed as `heavy`.
+
+### Other differences
+
+- **Variants in `profiles.json`:** keep the variant in its own `variant` field.
+  A slot written as `provider/model#variant` is not applied and is listed as
+  invalid in the switch toast. OpenCode's own config and agent frontmatter use
+  `provider/model#variant`, and v2 reads those as usual.
+- **Corrupt `profiles.json`:** models are left untouched and `/profile` shows an
+  error toast; unlike 1.x, it does not offer to run the wizard. Fix or remove
+  the file by hand.
+- **Indicator:** shown in the prompt footer (`prompt.footer.status`) and
+  refreshed after every switch.
+- **Logs** go to the server's console (2.x has no plugin log API).
+
+### Not verified yet
+
+The [v2 smoke harness](./docs/testing-v2.md) runs against a real OpenCode
+2.0.29 (boot, RPC switching, config precedence, exclusions across restarts,
+`/profile` registration and the picker, a real turn before and after a switch,
+`OPENCODE_CONFIG_DIR`). It does not cover, and these remain manual checks or
+open questions:
+
+- the wizard, the footer rendering and switching the focused session from the
+  TUI;
+- named reasoning variants other than the one the harness uses, and how a model
+  picked with OpenCode's `/models` command interacts with a switch (the 1.x
+  [TUI model override](#usage) caveat has not been checked on 2.x);
+- installing the package from npm by name;
+- OpenCode versions other than 2.0.29.
+
 ## Development
 
 ```sh
 bun run typecheck
 bun test
 bun run test:smoke
+bun run check          # typecheck, test and build both packages
+bun run test:smoke:v2  # real OpenCode 2.0.29, see docs/testing-v2.md
 ```
 
-The smoke test requires opencode 1.x on `PATH` (opencode 2.0 does not serve the
+The 1.x smoke test (`test:smoke`) requires opencode 1.x on `PATH` (opencode 2.0 does not serve the
 `/config` endpoint it checks). It builds and loads the shipped
 server entrypoint in an isolated XDG sandbox, switches between fake profiles
 (including an exclusion that preserves a prior effective model+variant),
 restarts the process, and verifies `GET /config`, `GET /agent`, process
 identity and session survival. It never uses your real opencode config,
 credentials or providers.
+
+The v2 smoke test (`test:smoke:v2`) installs OpenCode 2.0.29 into a temporary
+sandbox instead of using the one on `PATH`, and also never touches your config,
+credentials or background service. What it checks and what is left to manual
+testing is described in [`docs/testing-v2.md`](./docs/testing-v2.md).
 
 The TUI override caveat was source-verified against opencode 1.18.11: its local
 model store gives a manual per-agent choice priority over refreshed agent/config
