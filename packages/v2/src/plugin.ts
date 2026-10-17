@@ -13,11 +13,13 @@ import { profilesFileSchema } from "../../../src/core/schema.js"
 import {
   defaultModel,
   describeInvalidSlot,
+  describeUnavailableVariants,
   inspectAgents,
   invalidSlots,
   nextEffective,
   writeAgentModels,
   type AgentEditorLike,
+  type CatalogModel,
   type Inspection,
   type ListedAgent,
 } from "./apply.js"
@@ -86,6 +88,11 @@ function consoleLog(level: LogLevel, message: string): void {
  * are compared with the plan: any that lists a different model was fixed by
  * the user's config (ADR-0003), which makes the profile partial. Only agents
  * that took the profile's model are recorded in `effective` (ADR-0002).
+ *
+ * Variants. Those agents are also checked against the model catalog
+ * (`ctx.model.list()`): a variant the model does not offer is applied anyway
+ * but reported, because the host only rejects it on the next prompt. A catalog
+ * that cannot be read reports nothing.
  */
 export async function setupProfileSwitcher(
   ctx: HostContext,
@@ -143,6 +150,17 @@ export async function setupProfileSwitcher(
     return listed.data.map((agent) => ({ id: agent.id, model: agent.model }))
   }
 
+  /** The location's model catalog; empty (nothing to check against) when it cannot be read. */
+  async function listCatalog(): Promise<CatalogModel[]> {
+    try {
+      const catalog = await ctx.model.list()
+      return catalog.data.map((model) => ({ providerID: model.providerID, id: model.id, variants: model.variants }))
+    } catch (error) {
+      log("warn", `model catalog unavailable (${(error as Error).message}); variants not checked`)
+      return []
+    }
+  }
+
   /** Whether the listing has agents the transform did not see, which a reload still has to write. */
   function hasUnseenAgents(listed: readonly ListedAgent[]): boolean {
     if (!seen) return true
@@ -178,7 +196,7 @@ export async function setupProfileSwitcher(
       }
       return
     }
-    inspection = inspectAgents(read.profiles, plan, listed)
+    inspection = inspectAgents(read.profiles, plan, listed, await listCatalog())
 
     const { effective, changed } = nextEffective(read.profiles.effective, inspection.applied)
     if (changed) {
@@ -210,7 +228,11 @@ export async function setupProfileSwitcher(
     if (inspection.unapplied.length > 0) {
       parts.push(`no model after the reload: ${inspection.unapplied.join(", ")}`)
     }
+    if (inspection.unavailableVariants.length > 0) {
+      parts.push(`variant not offered by the model, prompts will fail: ${describeUnavailableVariants(inspection.unavailableVariants)}`)
+    }
     const clean = inspection.fixedByConfig.length === 0 && inspection.unapplied.length === 0
+      && inspection.unavailableVariants.length === 0
     log(clean ? "log" : "warn", parts.join(" | "))
   }
 
@@ -259,6 +281,7 @@ export async function setupProfileSwitcher(
       unapplied: [...(settled?.unapplied ?? [])],
       unassigned: [...(settled?.plan.unassigned ?? [])],
       invalidSlots: invalid ? [] : invalidSlots(read.profiles),
+      unavailableVariants: (settled?.unavailableVariants ?? []).map((entry) => ({ ...entry, offered: [...entry.offered] })),
       agents: (settled?.agents ?? []).map((agent) => ({ ...agent })),
     }
   }

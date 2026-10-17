@@ -1,4 +1,4 @@
-import type { HostModel } from "../../src/apply.js"
+import type { CatalogModel, HostModel } from "../../src/apply.js"
 import type { HostContext } from "../../src/plugin.js"
 
 interface FakeAgent {
@@ -25,6 +25,8 @@ export interface FakeHostOptions {
   config?: Record<string, ConfigAgent>
   /** `agent.list()` rejects this many times before answering. */
   listFailures?: number
+  /** What `model.list()` answers; an `Error` makes it reject. */
+  catalog?: CatalogModel[] | Error
 }
 
 type AgentCallback = (editor: unknown) => void
@@ -45,6 +47,7 @@ export class FakeHost {
   builtins: Record<string, HostModel | undefined>
   config: Record<string, ConfigAgent>
   listFailures: number
+  catalog: CatalogModel[] | Error
   agents: FakeAgent[] = []
   defaultModel: { providerID: string; modelID: string } | undefined
   agentReloads = 0
@@ -72,6 +75,7 @@ export class FakeHost {
     }
     this.config = options.config ?? {}
     this.listFailures = options.listFailures ?? 0
+    this.catalog = options.catalog ?? []
   }
 
   /** Recompute the agent list: built-ins, then user transforms, then config. */
@@ -166,6 +170,10 @@ export class FakeHost {
         reload: async () => {
           this.modelReloads++
           this.run()
+        },
+        list: async () => {
+          if (this.catalog instanceof Error) throw this.catalog
+          return { location: { directory: "/repo" }, data: this.catalog.map((model) => ({ ...model })) }
         },
       },
       rpc: {

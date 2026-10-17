@@ -36,6 +36,10 @@ _Avoid_: agente excluido, override, agente bloqueado
 En 2.0, el perfil activo cuando uno o más agentes de su asignación quedaron fijados por config y no tomaron el modelo del perfil; se informa al usuario.
 _Avoid_: perfil roto, perfil inválido
 
+**Variante no ofrecida**:
+En 2.0, la variante que un perfil asigna a un agente cuando el catálogo de modelos de opencode lista ese modelo sin esa variante (p.ej. `big-pickle#high`, que no ofrece ninguna nombrada). Se aplica igual y se avisa, porque opencode recién la rechaza al mandar un prompt. Una variante omitida o `default`, un modelo que el catálogo no lista y un agente fijado por config nunca avisan.
+_Avoid_: variante inválida, variante rota
+
 **Duplicación de perfil**:
 Crea un perfil nuevo, independiente y autocontenido con la misma configuración completa que el de origen (modelos `heavy` y `rest`, asignaciones, modelos específicos, variantes y exclusiones); no altera el estado global activo ni el efectivo.
 _Avoid_: clone, clonar, copia

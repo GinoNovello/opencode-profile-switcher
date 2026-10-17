@@ -4,11 +4,13 @@ import type { ProfilesFile } from "../../../src/core/schema.js"
 import {
   defaultModel,
   describeInvalidSlot,
+  describeUnavailableVariants,
   inspectAgents,
   invalidSlots,
   nextEffective,
   writeAgentModels,
   type AgentEditorLike,
+  type CatalogModel,
   type HostModel,
   type ListedAgent,
 } from "../src/apply.js"
@@ -201,6 +203,91 @@ describe("inspectAgents", () => {
 
   test("placements for agents the location lacks are not reported", () => {
     expect(inspect(profiles(), []).agents).toEqual([])
+  })
+})
+
+describe("unavailable variants", () => {
+  const glm5 = { providerID: "zai", id: "glm-5", variant: "max" }
+  const glm4 = { providerID: "zai", id: "glm-4" }
+  const docs = { providerID: "anthropic", id: "claude-docs", variant: "high" }
+  const catalog = (entries: Record<string, string[]>): CatalogModel[] =>
+    Object.entries(entries).map(([ref, variants]) => {
+      const [providerID, id] = ref.split("/") as [string, string]
+      return { providerID, id, variants: variants.map((variant) => ({ id: variant })) }
+    })
+
+  function inspect(file: ProfilesFile, listed: ListedAgent[], models: CatalogModel[]) {
+    const plan = planApply(file, { agents: listed.map((agent) => agent.id) })
+    if (!plan.applied) throw new Error("expected a ready plan")
+    return inspectAgents(file, plan, listed, models)
+  }
+
+  test("a variant the model offers is not reported", () => {
+    const report = inspect(profiles(), [{ id: "build", model: glm5 }], catalog({ "zai/glm-5": ["high", "max"] }))
+    expect(report.unavailableVariants).toEqual([])
+  })
+
+  test("a variant the model does not offer is reported, and still applied", () => {
+    const report = inspect(
+      profiles(),
+      [{ id: "build", model: glm5 }, { id: "docs", model: docs }],
+      catalog({ "zai/glm-5": ["low", "high"], "anthropic/claude-docs": [] }),
+    )
+    expect(report.unavailableVariants).toEqual([
+      { agent: "build", placement: "heavy", model: "zai/glm-5", variant: "max", offered: ["low", "high"] },
+      { agent: "docs", placement: "specific", model: "anthropic/claude-docs", variant: "high", offered: [] },
+    ])
+    expect(report.applied).toEqual({
+      build: { model: "zai/glm-5", variant: "max" },
+      docs: { model: "anthropic/claude-docs", variant: "high" },
+    })
+  })
+
+  test("a model the catalog does not list gives no information and is not reported", () => {
+    const report = inspect(profiles(), [{ id: "build", model: glm5 }], catalog({ "zai/glm-4": [] }))
+    expect(report.unavailableVariants).toEqual([])
+    expect(inspect(profiles(), [{ id: "build", model: glm5 }], []).unavailableVariants).toEqual([])
+  })
+
+  test("an omitted variant is never reported", () => {
+    const report = inspect(profiles(), [{ id: "explore", model: glm4 }], catalog({ "zai/glm-4": [] }))
+    expect(report.unavailableVariants).toEqual([])
+  })
+
+  test("a default variant is never reported", () => {
+    const file = profiles()
+    file.profiles.glm!.heavy = { model: "zai/glm-5", variant: "default" }
+    const report = inspect(file, [{ id: "build", model: { ...glm5, variant: "default" } }], catalog({ "zai/glm-5": [] }))
+    expect(report.unavailableVariants).toEqual([])
+  })
+
+  test("the variant of a model fixed by config is the user's and is not checked", () => {
+    const report = inspect(
+      profiles(),
+      [{ id: "build", model: { providerID: "openai", id: "gpt", variant: "turbo" } }],
+      catalog({ "zai/glm-5": [], "openai/gpt": [] }),
+    )
+    expect(report.fixedByConfig).toEqual(["build"])
+    expect(report.unavailableVariants).toEqual([])
+  })
+
+  test("an excluded agent restoring its remembered variant is checked too", () => {
+    const report = inspect(
+      profiles({ effective: { vision: { model: "zai/glm-5", variant: "max" } } }),
+      [{ id: "vision", model: glm5 }],
+      catalog({ "zai/glm-5": ["high"] }),
+    )
+    expect(report.unavailableVariants).toEqual([
+      { agent: "vision", placement: "excluded", model: "zai/glm-5", variant: "max", offered: ["high"] },
+    ])
+  })
+
+  test("descriptions group the agents of one model and variant", () => {
+    expect(describeUnavailableVariants([
+      { agent: "build", placement: "heavy", model: "opencode/big-pickle", variant: "high", offered: [] },
+      { agent: "plan", placement: "heavy", model: "opencode/big-pickle", variant: "high", offered: [] },
+      { agent: "docs", placement: "specific", model: "zai/glm-5", variant: "max", offered: ["low", "high"] },
+    ])).toBe('"opencode/big-pickle#high" for build, plan (offers: none); "zai/glm-5#max" for docs (offers: low, high)')
   })
 })
 

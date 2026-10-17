@@ -1,7 +1,7 @@
 import { planApply, type ReadyApplyPlan } from "../../../src/core/apply-plan.js"
 import { slotToModelRef, type ModelRef } from "../../../src/core/model-ref.js"
 import type { EffectiveSlot, ProfilesFile } from "../../../src/core/schema.js"
-import type { AgentStatus, InvalidSlot, ModelJson } from "./rpc.js"
+import type { AgentStatus, InvalidSlot, ModelJson, UnavailableVariant } from "./rpc.js"
 
 /** A model as opencode 2.0 keeps it at runtime (`Agent.Info["model"]`). */
 export interface HostModel {
@@ -24,6 +24,17 @@ export interface AgentEditorLike {
 export interface ListedAgent {
   id: string
   model?: HostModel
+}
+
+/**
+ * A model of opencode's catalog, as `ctx.model.list()` reports it (the part of
+ * `ModelInfo` from `@opencode/client` this module uses). `variants` is always
+ * present: an empty list means the model offers no named variant.
+ */
+export interface CatalogModel {
+  providerID: string
+  id: string
+  variants: readonly { id: string }[]
 }
 
 function toHostModel(ref: ModelRef): HostModel {
@@ -102,6 +113,8 @@ export interface Inspection {
   unapplied: string[]
   /** Agents that took the profile's model, with the slot they took. */
   applied: Record<string, EffectiveSlot>
+  /** Agents that took a variant their model does not offer (see `unavailableVariant`). */
+  unavailableVariants: UnavailableVariant[]
 }
 
 /**
@@ -118,15 +131,35 @@ function landed(planned: HostModel, actual: HostModel): boolean {
 }
 
 /**
+ * The variants `catalog` offers for `model` when they do not include its
+ * variant; `undefined` when there is nothing to warn about. An omitted or
+ * `default` variant always resolves, and a model the catalog does not list
+ * gives no information, so neither is reported.
+ */
+export function unavailableVariant(
+  model: HostModel,
+  catalog: readonly CatalogModel[],
+): string[] | undefined {
+  if (model.variant === undefined || model.variant === "default") return undefined
+  const entry = catalog.find((candidate) => candidate.providerID === model.providerID && candidate.id === model.id)
+  if (!entry) return undefined
+  const offered = entry.variants.map((variant) => variant.id)
+  return offered.includes(model.variant) ? undefined : offered
+}
+
+/**
  * Compare the agents the host lists after a reload with `plan`, the active
  * profile's plan for those same agents. An agent the profile wrote that lists
  * a different model is fixed by config: the user's config runs after this
- * plugin and wins (ADR-0003).
+ * plugin and wins (ADR-0003). An agent that took the profile's model is also
+ * checked against `catalog` for a variant its model does not offer; the
+ * variant of a model fixed by config is the user's, so it is not checked.
  */
 export function inspectAgents(
   profiles: ProfilesFile,
   plan: ReadyApplyPlan,
   listed: readonly ListedAgent[],
+  catalog: readonly CatalogModel[] = [],
 ): Inspection {
   const active = profiles.profiles[plan.active]!
   const byId = new Map(listed.map((agent) => [agent.id, agent]))
@@ -134,6 +167,7 @@ export function inspectAgents(
   const fixedByConfig: string[] = []
   const unapplied: string[] = []
   const applied: Record<string, EffectiveSlot> = {}
+  const unavailableVariants: UnavailableVariant[] = []
 
   for (const entry of plan.agents) {
     const agent = byId.get(entry.name)
@@ -146,7 +180,19 @@ export function inspectAgents(
     if (planned && entry.action === "set") {
       if (!agent.model) unapplied.push(agent.id)
       else if (!landed(planned, agent.model)) fixed = true
-      else applied[agent.id] = entry.slot
+      else {
+        applied[agent.id] = entry.slot
+        const offered = unavailableVariant(planned, catalog)
+        if (offered) {
+          unavailableVariants.push({
+            agent: agent.id,
+            placement: active.placements[agent.id] ?? null,
+            model: `${planned.providerID}/${planned.id}`,
+            variant: planned.variant!,
+            offered,
+          })
+        }
+      }
     }
     if (fixed) fixedByConfig.push(agent.id)
 
@@ -159,7 +205,7 @@ export function inspectAgents(
     })
   }
 
-  return { plan, agents, fixedByConfig, unapplied, applied }
+  return { plan, agents, fixedByConfig, unapplied, applied, unavailableVariants }
 }
 
 /**
@@ -197,6 +243,23 @@ export function invalidSlots(profiles: ProfilesFile): InvalidSlot[] {
 export function describeInvalidSlot(slot: InvalidSlot): string {
   const where = slot.agent ? `${slot.placement} agent "${slot.agent}"` : `the ${slot.placement} tier`
   return `"${slot.model}" for ${where}`
+}
+
+/**
+ * Unavailable variants grouped by `provider/model#variant`, for the log and the
+ * TUI: `"opencode/big-pickle#high" for build, plan (offers: none)`.
+ */
+export function describeUnavailableVariants(entries: readonly UnavailableVariant[]): string {
+  const groups = new Map<string, { agents: string[]; offered: string[] }>()
+  for (const entry of entries) {
+    const key = `${entry.model}#${entry.variant}`
+    const group = groups.get(key) ?? { agents: [], offered: entry.offered }
+    group.agents.push(entry.agent)
+    groups.set(key, group)
+  }
+  return [...groups].map(([key, group]) =>
+    `"${key}" for ${group.agents.join(", ")} (offers: ${group.offered.length ? group.offered.join(", ") : "none"})`,
+  ).join("; ")
 }
 
 /**
