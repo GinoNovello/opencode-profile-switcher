@@ -249,6 +249,12 @@ describe("unavailable variants", () => {
     expect(inspect(profiles(), [{ id: "build", model: glm5 }], []).unavailableVariants).toEqual([])
   })
 
+  test("an agent left with no model after the reload is unapplied, not checked", () => {
+    const report = inspect(profiles(), [{ id: "build" }], catalog({ "zai/glm-5": [] }))
+    expect(report.unapplied).toEqual(["build"])
+    expect(report.unavailableVariants).toEqual([])
+  })
+
   test("an omitted variant is never reported", () => {
     const report = inspect(profiles(), [{ id: "explore", model: glm4 }], catalog({ "zai/glm-4": [] }))
     expect(report.unavailableVariants).toEqual([])

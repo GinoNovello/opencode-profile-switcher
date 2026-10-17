@@ -113,7 +113,7 @@ export interface Inspection {
   unapplied: string[]
   /** Agents that took the profile's model, with the slot they took. */
   applied: Record<string, EffectiveSlot>
-  /** Agents that took a variant their model does not offer (see `unavailableVariant`). */
+  /** Agents that took a variant their model does not offer (see `offeredWithoutVariant`). */
   unavailableVariants: UnavailableVariant[]
 }
 
@@ -136,7 +136,7 @@ function landed(planned: HostModel, actual: HostModel): boolean {
  * `default` variant always resolves, and a model the catalog does not list
  * gives no information, so neither is reported.
  */
-export function unavailableVariant(
+export function offeredWithoutVariant(
   model: HostModel,
   catalog: readonly CatalogModel[],
 ): string[] | undefined {
@@ -182,7 +182,7 @@ export function inspectAgents(
       else if (!landed(planned, agent.model)) fixed = true
       else {
         applied[agent.id] = entry.slot
-        const offered = unavailableVariant(planned, catalog)
+        const offered = offeredWithoutVariant(planned, catalog)
         if (offered) {
           unavailableVariants.push({
             agent: agent.id,

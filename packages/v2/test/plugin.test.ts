@@ -258,6 +258,52 @@ describe("boot", () => {
     expect(logs).toContain("warn: model catalog unavailable (catalog down); variants not checked")
   })
 
+  test("a status read while the catalog is slow is pending, never an empty ready", async () => {
+    save(file())
+    let listing!: () => void
+    const listed = new Promise<void>((done) => (listing = done))
+    let answer!: (catalog: { providerID: string; id: string; variants: { id: string }[] }[]) => void
+    const host = new FakeHost({
+      catalog: () => {
+        listing()
+        return new Promise((done) => (answer = done))
+      },
+    })
+    const switcher = await setupProfileSwitcher(host.context(), { path, log: (level, message) => logs.push(`${level}: ${message}`) })
+    host.load()
+    await listed
+    expect(switcher.status()).toMatchObject({ ready: false, phase: "pending", agents: [], unavailableVariants: [] })
+    expect(((await host.call("status")) as StatusOutput).phase).toBe("pending")
+
+    answer([{ providerID: "zai", id: "glm-5", variants: [] }])
+    await switcher.ready
+    const status = switcher.status()
+    expect(status).toMatchObject({ ready: true, phase: "ready" })
+    expect(status.agents.length).toBeGreaterThan(0)
+    expect(status.unavailableVariants.map((entry) => entry.agent)).toEqual(["build", "plan"])
+  })
+
+  test("a catalog that never answers ends the pass without warnings and frees the queue", async () => {
+    save(file())
+    const host = new FakeHost({ catalog: () => new Promise(() => {}) })
+    const switcher = await boot(host, { catalogTimeoutMs: 5 })
+    expect(switcher.status()).toMatchObject({ ready: true, phase: "ready", unavailableVariants: [] })
+    expect(switcher.status().agents.length).toBeGreaterThan(0)
+    expect(logs).toContain("warn: model catalog did not answer within 5ms; variants not checked")
+
+    // The next pass is not stuck behind the hung listing.
+    host.catalog = [{ providerID: "openai", id: "gpt-5", variants: [] }]
+    const switched = (await host.call("switch", { profile: "gpt" })) as StatusOutput
+    expect(switched.unavailableVariants.map((entry) => entry.agent)).toEqual(["build", "plan"])
+  })
+
+  test("a catalog rejection without a message is still described in the log", async () => {
+    save(file())
+    const host = new FakeHost({ catalog: () => Promise.reject("socket closed") })
+    await boot(host)
+    expect(logs).toContain("warn: model catalog unavailable (socket closed); variants not checked")
+  })
+
   test("profile names are re-read on each status call", async () => {
     save(file())
     const host = new FakeHost()

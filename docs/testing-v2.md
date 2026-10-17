@@ -97,7 +97,9 @@ normalization.
 took a profile model whose variant is not among the catalog's
 `ModelInfo.variants[].id` for that model. It is a warning only; the switcher
 applies the slot as written. It is empty unless `phase` is `ready`, and empty
-when the catalog cannot be read. An omitted or `default` variant, a model the
+when the catalog cannot be read or does not answer within the pass's timeout
+(5 s by default). The catalog is read before the pass is published, so a
+`ready` status always carries the agents and warnings of that pass. An omitted or `default` variant, a model the
 catalog does not list, and an agent fixed by config are never reported. An
 empty `variants` array is information, not its absence: the host rejects any
 named variant for such a model (see Big Pickle below). The TUI shows the

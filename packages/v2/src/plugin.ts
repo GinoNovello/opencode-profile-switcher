@@ -39,6 +39,8 @@ export interface SwitcherOptions {
   learnAttempts?: number
   /** Delay before the first retry; doubles on each one. */
   learnDelayMs?: number
+  /** How long a pass waits for `ctx.model.list()` before reporting no variant warnings. */
+  catalogTimeoutMs?: number
   /** Injectable for tests. */
   sleep?: (ms: number) => Promise<void>
 }
@@ -92,7 +94,9 @@ function consoleLog(level: LogLevel, message: string): void {
  * Variants. Those agents are also checked against the model catalog
  * (`ctx.model.list()`): a variant the model does not offer is applied anyway
  * but reported, because the host only rejects it on the next prompt. A catalog
- * that cannot be read reports nothing.
+ * that cannot be read, or does not answer within `catalogTimeoutMs`, reports
+ * nothing. It is read before the pass is published, so `status()` never answers
+ * `ready` without what the pass found.
  */
 export async function setupProfileSwitcher(
   ctx: HostContext,
@@ -102,6 +106,7 @@ export async function setupProfileSwitcher(
   const log = options.log ?? consoleLog
   const attempts = Math.max(1, options.learnAttempts ?? 8)
   const baseDelay = options.learnDelayMs ?? 100
+  const catalogTimeout = options.catalogTimeoutMs ?? 5000
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)))
 
   let read: ReadResult = readProfiles(path)
@@ -150,14 +155,28 @@ export async function setupProfileSwitcher(
     return listed.data.map((agent) => ({ id: agent.id, model: agent.model }))
   }
 
-  /** The location's model catalog; empty (nothing to check against) when it cannot be read. */
+  /**
+   * The location's model catalog; empty (nothing to check against) when it
+   * cannot be read or does not answer in time, so a hung listing cannot hold
+   * the pass queue.
+   */
   async function listCatalog(): Promise<CatalogModel[]> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<"timeout">((done) => (timer = setTimeout(() => done("timeout"), catalogTimeout)))
     try {
-      const catalog = await ctx.model.list()
+      const catalog = await Promise.race([ctx.model.list(), timeout])
+      if (catalog === "timeout") {
+        log("warn", `model catalog did not answer within ${catalogTimeout}ms; variants not checked`)
+        return []
+      }
       return catalog.data.map((model) => ({ providerID: model.providerID, id: model.id, variants: model.variants }))
     } catch (error) {
-      log("warn", `model catalog unavailable (${(error as Error).message}); variants not checked`)
+      const reason = error instanceof Error ? error.message
+        : error && typeof error === "object" && "message" in error ? String(error.message) : String(error)
+      log("warn", `model catalog unavailable (${reason}); variants not checked`)
       return []
+    } finally {
+      clearTimeout(timer)
     }
   }
 
@@ -184,19 +203,24 @@ export async function setupProfileSwitcher(
       await ctx.agent.reload()
       listed = await listAgents()
     }
+    // Everything the pass reports is gathered before it is published: until
+    // then `status()` keeps answering `pending`.
+    const plan = read.status === "invalid"
+      ? undefined
+      : planApply(read.profiles, { agents: listed.map((agent) => agent.id) })
+    const catalog = plan?.applied ? await listCatalog() : []
     phase = "ready"
     passError = null
     inspection = undefined
-    if (read.status === "invalid") return
+    if (!plan) return
 
-    const plan = planApply(read.profiles, { agents: listed.map((agent) => agent.id) })
     if (!plan.applied) {
       if (plan.reason === "unknown-active") {
         log("warn", `active profile "${plan.active}" is not defined; run the profile-switcher wizard`)
       }
       return
     }
-    inspection = inspectAgents(read.profiles, plan, listed, await listCatalog())
+    inspection = inspectAgents(read.profiles, plan, listed, catalog)
 
     const { effective, changed } = nextEffective(read.profiles.effective, inspection.applied)
     if (changed) {
