@@ -47,6 +47,13 @@ The harness verifies:
   `switchModel` asserts that reload preserved `big-pickle#default`. Assistant metadata
   establishes the model and named variant
   used; response text is deliberately not asserted.
+- Variants the model does not offer: the catalog (`client.model.list()`) lists
+  `big-pickle` with `variants: []`, so the boot status reports
+  `unavailableVariants` for exactly the agents that took alpha's
+  `big-pickle#high` (`build`, `plan`, markdown `loose`; not the agents fixed by
+  config), the server log carries the warning, and the agents still list
+  `variant: "high"`. Switching to beta clears it except for excluded `build`,
+  which restores its remembered `big-pickle#high`.
 - `OPENCODE_CONFIG_DIR` selecting the sandbox override's `profiles.json`.
 
 A missing registry network connection prints an explicit `SKIP`. Registry HTTP
@@ -82,6 +89,21 @@ has no unapplied agents. This proves the switcher's effective equivalence case.
 It does not exercise the host's internal absent-versus-default comparison inside
 `switchModel`; the successful Big Pickle turn separately asserts session
 normalization.
+
+## Variant warning in the RPC status
+
+`status` (and the `switch` result) carries `unavailableVariants`: one entry
+`{ agent, placement, model: "provider/model", variant, offered }` per agent that
+took a profile model whose variant is not among the catalog's
+`ModelInfo.variants[].id` for that model. It is a warning only; the switcher
+applies the slot as written. It is empty unless `phase` is `ready`, and empty
+when the catalog cannot be read or does not answer within the pass's timeout
+(5 s by default). The catalog is read before the pass is published, so a
+`ready` status always carries the agents and warnings of that pass. An omitted or `default` variant, a model the
+catalog does not list, and an agent fixed by config are never reported. An
+empty `variants` array is information, not its absence: the host rejects any
+named variant for such a model (see Big Pickle below). The TUI shows the
+warning in the switch toast; the `switched` event does not carry it.
 
 The named variant `low` is asserted on successful Space Bunny assistant message
 metadata. Big Pickle advertises no named variants: an attempted `high` inference

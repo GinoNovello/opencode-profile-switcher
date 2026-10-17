@@ -186,6 +186,17 @@ try {
   assert.equal(boot.agents.find((a: any) => a.id === "pinneddefault").fixedByConfig, false)
   record("variant-default-effective-equivalence", boot.agents.find((a: any) => a.id === "pinneddefault"))
   record("variant-on-disk", { repo: find("pinnedrepo").model, markdown: find("pinnedmd").model, omitted: find("title").model })
+  // The catalog lists Big Pickle with no named variants and Space Bunny with
+  // low; only agents that took the profile's big-pickle#high are warned about.
+  const catalog = (await client.model.list({ location })).data
+  const offered = (id: string) => catalog.find((m: any) => m.providerID === "opencode" && m.id === id)?.variants.map((v: any) => v.id)
+  assert.deepEqual(offered("big-pickle"), [])
+  assert(offered("space-bunny-free")?.includes("low"))
+  assert.deepEqual(boot.unavailableVariants.map((v: any) => v.agent).sort(), ["build", "loose", "plan"])
+  for (const v of boot.unavailableVariants) assert.deepEqual({ model: v.model, variant: v.variant, offered: v.offered }, { model: "opencode/big-pickle", variant: "high", offered: [] })
+  assert.equal(find("build").model.variant, "high")
+  await eventually(async () => output, text => text.includes('variant not offered by the model, prompts will fail: "opencode/big-pickle#high"'), 5_000)
+  record("variant-not-offered-warning", { catalog: { "big-pickle": offered("big-pickle"), "space-bunny-free": offered("space-bunny-free") }, warnings: boot.unavailableVariants })
   const abort = new AbortController()
   const events: unknown[] = []
   const unsubscribe = rpc.events.on("switched", (event: unknown) => events.push(event), { signal: abort.signal })
@@ -201,6 +212,8 @@ try {
     assert.equal(server!.exitCode, null)
     assert.equal((await agents()).find((a: any) => a.id === "plan").model.id, "space-bunny-free")
     assert.equal(switched.agents.find((a: any) => a.id === "build").model.id, "big-pickle")
+    // Beta's heavy space-bunny-free#low is offered; excluded build keeps big-pickle#high.
+    assert.deepEqual(switched.unavailableVariants.map((v: any) => [v.agent, v.placement]), [["build", "excluded"]])
     record("live-switch-event", events)
   } finally { abort.abort(); unsubscribe?.(); void stream }
   rmSync(join(config, "agents/loose.md"))
