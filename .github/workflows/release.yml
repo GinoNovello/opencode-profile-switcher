@@ -1,30 +1,91 @@
 name: release
 
-# Every push to main runs typecheck + tests. Publishing only happens when this
-# workflow is started explicitly with workflow_dispatch; that run bumps the
-# patch version, tags it, pushes the bump, and publishes it to npm.
+# CI: every push to main and every pull request runs `bun run check`, which
+# typechecks, tests and builds both packages (1.x at the root and
+# opencode-profile-switcher-v2 in packages/v2).
+#
+# Publishing only happens when this workflow is started explicitly with
+# workflow_dispatch from main. That run bumps the version of ONE package, tags
+# it, pushes the bump, and publishes that package to npm. The other package is
+# not bumped, tagged or published.
+#
+# Two inputs:
+#
+#   package — which package to release.
+#     v1 — `opencode-profile-switcher` (repo root), for opencode 1.x.
+#     v2 — `opencode-profile-switcher-v2` (packages/v2), for opencode 2.x.
+#
+#   channel — which npm dist-tag to publish to.
+#     latest — a patch bump (0.1.7 -> 0.1.8) published to the `latest` dist-tag.
+#              This is what users installing the plugin normally get.
+#     next   — a prerelease bump (0.1.7 -> 0.1.8-next.0) published to the `next`
+#              dist-tag only. `latest` keeps pointing at the last stable release,
+#              so normal installs are untouched. Use it to get a build onto npm
+#              for runtime verification: opencode only loads the `./tui` export
+#              from a published package, so the TUI half of this plugin cannot be
+#              exercised locally. Install it with `@next` to test.
+#
+#   gh workflow run release.yml -f package=v2 -f channel=next
+#
+# Git tags differ per package so they never collide:
+#   v1 — `v<version>` (e.g. `v0.1.9`), the scheme used since the first release.
+#   v2 — `opencode-profile-switcher-v2@<version>` (e.g.
+#        `opencode-profile-switcher-v2@0.1.1`): the npm package name plus the
+#        version, so the tag says which package it belongs to and can never be
+#        mistaken for a 1.x `v*` tag.
 #
 # Setup required once: add a repo secret NPM_TOKEN (npm > Access Tokens >
-# Automation token). Without it, this workflow still runs as CI (typecheck +
-# tests) but skips the version bump and publish.
+# Automation token). Without it, CI still runs, but a publish run fails before
+# bumping anything.
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to publish (v1 = opencode-profile-switcher, v2 = opencode-profile-switcher-v2)"
+        type: choice
+        options: [v1, v2]
+        default: v1
+      channel:
+        description: "npm dist-tag to publish to"
+        type: choice
+        options: [latest, next]
+        default: latest
 
-concurrency:
-  group: release
-  cancel-in-progress: false
+permissions:
+  contents: read
 
 jobs:
-  release:
+  check:
     if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: check-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+
+      # 1.x: typecheck, test, build. v2: typecheck, test, build.
+      - run: bun run check
+
+  publish:
+    needs: check
+    # Only an explicit dispatch from main publishes; a dispatch from any other
+    # branch would ship unreviewed code.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release
+      cancel-in-progress: false
     permissions:
       contents: write
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,22 +101,71 @@ jobs:
 
       - run: bun install
 
-      - run: bun run typecheck
-
-      - run: bun test
-
-      - run: bun run build
-
       - name: Bump version, tag, push and publish
-        if: ${{ github.event_name == 'workflow_dispatch' && env.NPM_TOKEN != '' }}
         env:
-          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE: ${{ inputs.package }}
+          CHANNEL: ${{ inputs.channel }}
         run: |
+          set -euo pipefail
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is not set; nothing was bumped or published."
+            exit 1
+          fi
+
           # `bun install` can rewrite bun.lock; discard that drift so the tree is
           # clean and `npm version` (which refuses a dirty tree) can run.
           git checkout -- bun.lock 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version patch -m "chore(release): v%s [skip ci]"
-          git push --follow-tags
-          npm publish --access public
+
+          if [ "$CHANNEL" = "next" ]; then
+            # 0.1.7 -> 0.1.8-next.0, and a second run -> 0.1.8-next.1.
+            BUMP=(prerelease --preid next)
+            # --tag next leaves the `latest` dist-tag pointing at the last
+            # stable release, so a plain `npm i <package>` is unaffected.
+            PUBLISH=(--access public --tag next)
+          else
+            BUMP=(patch)
+            PUBLISH=(--access public)
+          fi
+
+          case "$PACKAGE" in
+            v1)
+              # The root is the git root, so `npm version` commits and tags
+              # `v<version>` itself. It only touches the root package.json.
+              npm version "${BUMP[@]}" -m "chore(release): v%s [skip ci]"
+              git push --follow-tags
+              npm publish "${PUBLISH[@]}"
+              ;;
+            v2)
+              cd packages/v2
+              # Bump only the manifest; the commit and the per-package tag are
+              # made below. --no-workspaces-update keeps npm from running an
+              # install over the bun workspace.
+              npm version "${BUMP[@]}" --no-git-tag-version --no-workspaces-update
+              VERSION=$(node -p 'require("./package.json").version')
+              TAG="opencode-profile-switcher-v2@$VERSION"
+              # bun.lock records the workspace version; update just that line
+              # instead of re-running `bun install`, which could add the drift
+              # discarded above to the release commit.
+              # shellcheck disable=SC2016 # JS source, not shell expansions.
+              node -e '
+                const fs = require("fs")
+                const lock = fs.readFileSync("../../bun.lock", "utf8")
+                const re = /("name": "opencode-profile-switcher-v2",\s*"version": ")[^"]*(")/
+                if (!re.test(lock)) throw new Error("v2 workspace version not found in bun.lock")
+                fs.writeFileSync("../../bun.lock", lock.replace(re, `$1${process.argv[1]}$2`))
+              ' "$VERSION"
+              git add package.json ../../bun.lock
+              git commit -m "chore(release): $TAG [skip ci]"
+              git tag -a "$TAG" -m "$TAG"
+              git push --follow-tags
+              npm publish "${PUBLISH[@]}"
+              ;;
+            *)
+              echo "::error::Unknown package '$PACKAGE'."
+              exit 1
+              ;;
+          esac
