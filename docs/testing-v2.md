@@ -28,7 +28,8 @@ ancestors:
 
 Before installing anything, the harness fails if any of `.opencode`, `.claude`,
 `.agents`, `opencode.json`, `opencode.jsonc`, `.git`, `.hg` or `AGENTS.md`
-exists above the sandbox. An empty `.opencode`, `.claude` or `.agents`
+exists above the sandbox, checking the ancestors of both its path and its real
+path, since OpenCode resolves symlinks. An empty `.opencode`, `.claude` or `.agents`
 directory is ignored, because it loads nothing. An ancestor the harness cannot
 read fails too. So `TMPDIR` must not be inside a git or Mercurial repository
 (a worktree, or a home directory kept as a dotfiles repo). The default `TMPDIR`
@@ -83,7 +84,8 @@ not the profile transform ran. In that order:
   therefore carry a variant other than beta's.
 - **plain**: the first with no variants at all, the Big Pickle case. Alpha's
   heavy uses it with `high`, which it does not offer.
-- **spare**: the first that is neither of those. Alpha's `rest` tier uses it.
+- **spare**: the first that is neither of those nor the host default. Alpha's
+  `rest` tier uses it.
 
 When the catalog has no model for a role, the harness fails before writing
 any fixture with `Catalog drift: the sandbox catalog of OpenCode 2.0.29 no

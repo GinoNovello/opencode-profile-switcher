@@ -1,6 +1,6 @@
 // Opt-in integration harness. No imports from the developer's OpenCode install.
 import { strict as assert } from "node:assert"
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { Database } from "bun:sqlite"
@@ -92,7 +92,16 @@ try {
   const configNames = [".opencode", ".claude", ".agents", "opencode.json", "opencode.jsonc"]
   const rootNames = [".git", ".hg", "AGENTS.md"]
   const isolation = `Set TMPDIR to a directory with none of ${[...configNames, ...rootNames].join(", ")} above it (an empty ${configNames.slice(0, 3).join(", ")} directory is ignored).`
-  for (let dir = dirname(sandbox); ; dir = dirname(dir)) {
+  // OpenCode resolves the project through symlinks, so check the ancestors of
+  // both the lexical and the real sandbox path.
+  const ancestors = new Set<string>()
+  for (const start of [sandbox, realpathSync(sandbox)]) {
+    for (let dir = dirname(start); ; dir = dirname(dir)) {
+      ancestors.add(dir)
+      if (dir === dirname(dir)) break
+    }
+  }
+  for (const dir of ancestors) {
     for (const name of [...configNames, ...rootNames]) {
       const path = join(dir, name)
       let found: boolean
@@ -108,7 +117,6 @@ try {
         throw new Error(`Sandbox isolation: ${path} is above the sandbox and OpenCode ${reason}. ${isolation}`)
       }
     }
-    if (dir === dirname(dir)) break
   }
   const config = join(sandbox, "config", "opencode")
   const project = join(sandbox, "project")
