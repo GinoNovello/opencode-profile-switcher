@@ -15,30 +15,51 @@ loopback port, authenticates as `opencode`, and attaches TUI children with
 `--server` to that address. It does not use the background service. An explicit
 sandbox `OPENCODE_CONFIG_DIR` is introduced only in the final scenario.
 
-OpenCode 2.0.29 also loads `.opencode`, `.claude`, `.agents`, `opencode.json`
-and `opencode.jsonc` from every ancestor of the project directory, up to `/`,
-whether or not there is a git repository. The sandbox lives under `TMPDIR`, so
-its ancestors are `TMPDIR`'s. Before installing anything, the harness fails if
-any of those names exists above the sandbox (an empty directory is ignored).
-Under `/tmp` there is usually nothing to find. With `TMPDIR` under a home
-directory that has `~/.claude` or `~/.opencode`, either pick another
-`TMPDIR` or mask them with empty directories, for example (the `TMPDIR`
-directory must exist):
+OpenCode 2.0.29 also reads two things from outside the project directory. The
+sandbox lives under `TMPDIR`, so what it finds there depends on `TMPDIR`'s
+ancestors:
+
+- `.opencode`, `.claude`, `.agents`, `opencode.json` and `opencode.jsonc`, as
+  project config, from every ancestor up to `/`, whether or not there is a git
+  repository.
+- `AGENTS.md`, as instructions, from every directory between the project and
+  its root: the first ancestor with `.git` or `.hg`. These instructions go into
+  the prompts of the two real turns, which the public service receives.
+
+Before installing anything, the harness fails if any of `.opencode`, `.claude`,
+`.agents`, `opencode.json`, `opencode.jsonc`, `.git`, `.hg` or `AGENTS.md`
+exists above the sandbox. An empty `.opencode`, `.claude` or `.agents`
+directory is ignored, because it loads nothing. An ancestor the harness cannot
+read fails too. So `TMPDIR` must not be inside a git or Mercurial repository
+(a worktree, or a home directory kept as a dotfiles repo). The default `TMPDIR`
+(`/tmp`) usually has none of these above it.
+
+With `TMPDIR` under a home directory that has `~/.claude`, `~/.agents` or
+`~/.opencode`, either pick another `TMPDIR` or mask those directories with
+empty ones, for example (the `TMPDIR` directory must exist):
 
 ```sh
 bwrap --dev-bind / / --tmpfs ~/.claude --tmpfs ~/.agents --tmpfs ~/.opencode \
   --die-with-parent -- env TMPDIR="$HOME/smoke-tmp" bun run test:smoke:v2
 ```
 
+Through `--dev-bind / /`, `--tmpfs` creates any of those directories that does
+not exist yet, empty, in the real home. This is harmless: the guard ignores
+empty directories. `--tmpfs` cannot mask a file, so a `~/opencode.json` or
+`~/opencode.jsonc` stays visible and the guard fails. So does a `.git`, `.hg`
+or `AGENTS.md` above the sandbox.
+
 ## Catalog and model selection
 
-The scenarios do not name fixed models. OpenCode boots from a models.dev
-snapshot bundled in its binary and replaces it in the background with the live
-catalog, which it caches in its database. Deprecated models drop out of
-`client.model.list()`, and the host ignores a deprecated config `model`, so a
-fixed id breaks as soon as the public catalog rotates (#61: `space-bunny-free`).
-The live catalog can also differ from the snapshot the server answers with at
-first.
+The scenarios do not name fixed models. OpenCode 2.0.29 fetches its catalog
+from `https://models.opencode.ai/api.json` (its logs and cache key call it
+models.dev) and caches it in its database. A boot reads that cache first. Only
+without a cache does it start from a snapshot bundled in its binary, and then
+it fetches the live catalog in the background and swaps it in. Deprecated
+models drop out of `client.model.list()`, and the host ignores a deprecated
+config `model`, so a fixed id breaks as soon as the public catalog rotates
+(#61: `space-bunny-free`). On a fresh sandbox the live catalog can also differ
+from the snapshot the server answers with at first.
 
 So the harness first boots the sandbox server once, without the plugin, and
 waits until that server has cached the live catalog (the `models-dev:catalog`
@@ -47,29 +68,32 @@ key of its `kv` table). From then on every child runs with
 never refresh it, so the whole run sees one catalog. A second boot reads
 `client.model.list()` and `client.model.default()` from that cache, and the
 harness picks three models from the list. The catalog comes from the sandbox
-server, never from models.dev directly. Usable models are those
-with provider `opencode`, `status: "active"`, `enabled`, and every cost tier at
+server, never from the catalog URL directly. Usable models are those
+with provider `opencode`, `status: "active"`, `enabled`, and every cost entry at
 zero input and output (public models that need no credentials), ordered
 by release date, oldest first. Newly released free models are the ones that
-rotate out, so the oldest survive longest. In that order:
+rotate out, so the oldest survive longest. None of the three may be the host's
+own default model: otherwise the catalog default would look the same whether or
+not the profile transform ran. In that order:
 
-- **tiered**: the first that offers a named variant (any id other than
-  `default`) and is not the host's own default model. If tiered were the host
-  default, the catalog default would look the same whether or not the profile
-  transform ran. Beta's heavy uses its first variant (`tier`); the config- and
-  frontmatter-pinned agents use its last.
+- **variantful**: the first that offers at least two named variants (ids other
+  than `default`). Beta's heavy uses its first variant (`firstVariant`). The
+  config-pinned `pinnedglobal` uses its second (`secondVariant`), and the
+  frontmatter-pinned `pinnedmd` uses its last (`lastVariant`). Both pins
+  therefore carry a variant other than beta's.
 - **plain**: the first with no variants at all, the Big Pickle case. Alpha's
   heavy uses it with `high`, which it does not offer.
-- **rest**: the first that is neither of those. Alpha's rest uses it.
+- **spare**: the first that is neither of those. Alpha's `rest` tier uses it.
 
 When the catalog has no model for a role, the harness fails before writing
 any fixture with `Catalog drift: the sandbox catalog of OpenCode 2.0.29 no
 longer has a model that is <criterion>`, followed by the usable models and
 their variants and the host default. When the sandbox server does not cache
 the catalog within 60 s, the message is `The sandbox server did not cache the
-models.dev catalog`. The `catalog-selection` record, also in
-`SMOKE_V2_EVIDENCE`, shows the choice. On 2026-10-20 it was tiered
-`glm-5.3-flash-free` (`low`, `high`, `max`), plain `big-pickle`, rest
+models.dev catalog within 60s`, followed by the server's `Failed to fetch` or
+`Failed to cache` log lines, if any. The `catalog-selection` record, also in
+`SMOKE_V2_EVIDENCE`, shows the choice. On 2026-10-20 it was variantful
+`glm-5.3-flash-free` (`low`, `high`, `max`), plain `big-pickle`, spare
 `nemotron-3-ultra-free`, with host default `minimax-m3.1-flash-free`.
 
 Inference still goes to the public service. A model the catalog lists can
@@ -103,7 +127,7 @@ The harness verifies:
   factory reevaluations are allowed.
 - A real successful public-model turn with plain, followed by
   an RPC profile switch and `session.switchModel`, and another successful turn
-  using `tiered#tier`. A session read between RPC reload and
+  using `variantful#firstVariant`. A session read between RPC reload and
   `switchModel` asserts that reload preserved `plain#default`. Assistant metadata
   establishes the model and named variant
   used; response text is deliberately not asserted.
@@ -144,14 +168,14 @@ Stop only these private processes afterward.
 
 The harness asserts that agent listings preserve an omitted variant as absent
 and explicit `#default` as `"default"`. The matching `pinneddefault` agent has the
-exact rest model with `variant: "default"`, is not fixed by config, and the boot
+exact spare model with `variant: "default"`, is not fixed by config, and the boot
 has no unapplied agents. This proves the switcher's effective equivalence case.
 It does not exercise the host's internal absent-versus-default comparison inside
-`switchModel`; the successful Big Pickle turn separately asserts session
+`switchModel`; the successful plain turn separately asserts session
 normalization.
 
-`plain`, `tiered`, `tier` and `rest` stand for the models picked from the
-catalog (see above).
+`plain`, `variantful`, `spare` and the `*Variant` names stand for the models
+and variants picked from the catalog (see above).
 
 ## Loading the published package by name (opt-in)
 
@@ -234,7 +258,7 @@ empty `variants` array is information, not its absence: the host rejects any
 named variant for such a model (see Big Pickle below). The TUI shows the
 warning in the switch toast; the `switched` event does not carry it.
 
-The named variant `tier` is asserted on successful tiered assistant message
+The named variant `firstVariant` is asserted on successful variantful assistant message
 metadata. Plain advertises no named variants: an attempted `high` inference on
 Big Pickle failed with `VariantUnavailableError`, so its real turn uses the
 default and asserts `message.model.variant === "default"` for an omitted
