@@ -21,7 +21,7 @@ Install the one that matches your opencode version:
 | opencode | Package | Status |
 | --- | --- | --- |
 | 1.x, >= 1.18.11 | `opencode-profile-switcher` | Stable, on npm |
-| 2.x, >= 2.0.29 | `opencode-profile-switcher-v2` | **Experimental**, no npm release yet — see [opencode 2.x](#opencode-2x-experimental) |
+| 2.x, >= 2.0.29 | `opencode-profile-switcher-v2` | **Experimental**, on npm — see [opencode 2.x](#opencode-2x-experimental) |
 
 ### opencode 1.x
 
@@ -66,7 +66,8 @@ install steps are in the package README,
 `~/.config/opencode/opencode.jsonc`, either by package name (not verified) or
 pointing at a local build's `dist` (the setup the
 [v2 smoke harness](./docs/testing-v2.md) verifies, against opencode 2.0.29
-only). There is no npm release of it yet.
+only). The package is published on npm; loading it by name has not been
+verified by the harness yet.
 
 v2 behaves differently from 1.x in a few places; see
 [Differences in opencode 2.x](#differences-in-opencode-2x).
@@ -264,7 +265,7 @@ open questions:
 - named reasoning variants other than the one the harness uses, and how a model
   picked with opencode's `/models` command interacts with a switch (the 1.x
   [TUI model override](#usage) caveat has not been checked on 2.x);
-- installing the package by name from npm;
+- loading the package by name (as installed from npm);
 - opencode versions other than 2.0.29.
 
 ## Development

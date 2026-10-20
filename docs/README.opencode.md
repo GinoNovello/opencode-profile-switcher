@@ -77,8 +77,8 @@ Merge into any existing `plugin` array; do not replace other plugins.
 
 The 2.x package is `opencode-profile-switcher-v2`, built from
 [`packages/v2`](https://github.com/GinoNovello/opencode-profile-switcher/tree/main/packages/v2).
-It has no npm release yet. **Fetch and follow its own README for the
-install steps:**
+It is published on npm under that name. **Fetch and follow its own README for
+the install steps:**
 [`packages/v2/README.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/packages/v2/README.md)
 ([raw](https://raw.githubusercontent.com/GinoNovello/opencode-profile-switcher/main/packages/v2/README.md)).
 In short: one `plugins` entry in `~/.config/opencode/opencode.jsonc`, either by

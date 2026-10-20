@@ -15,7 +15,8 @@ Tested only against OpenCode **2.0.29**
 
 **By package name (not verified).** Add the package to `plugins` in
 `~/.config/opencode/opencode.jsonc` (`"*"` keeps OpenCode's built-in plugins).
-Installing it by package name has not been tested yet:
+The package is published on npm, but loading it by name has not been tested
+yet:
 
 ```jsonc
 {
