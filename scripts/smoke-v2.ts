@@ -1,8 +1,9 @@
 // Opt-in integration harness. No imports from the developer's OpenCode install.
 import { strict as assert } from "node:assert"
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { Database } from "bun:sqlite"
 
 const version = "2.0.29"
 const repo = resolve(import.meta.dir, "..")
@@ -84,6 +85,39 @@ async function stop() {
 }
 try {
   sandbox = mkdtempSync(join(tmpdir(), "profile-switcher-v2-"))
+  // OpenCode 2.0.29 loads project config from every ancestor of the project
+  // up to /, and AGENTS.md from every directory up to the first .git or .hg
+  // above it, injecting it into the real turns sent to the public service.
+  // Anything of either kind above the sandbox would leak the user's setup.
+  const configNames = [".opencode", ".claude", ".agents", "opencode.json", "opencode.jsonc"]
+  const rootNames = [".git", ".hg", "AGENTS.md"]
+  const isolation = `Set TMPDIR to a directory with none of ${[...configNames, ...rootNames].join(", ")} above it (an empty ${configNames.slice(0, 3).join(", ")} directory is ignored).`
+  // OpenCode resolves the project through symlinks, so check the ancestors of
+  // both the lexical and the real sandbox path.
+  const ancestors = new Set<string>()
+  for (const start of [sandbox, realpathSync(sandbox)]) {
+    for (let dir = dirname(start); ; dir = dirname(dir)) {
+      ancestors.add(dir)
+      if (dir === dirname(dir)) break
+    }
+  }
+  for (const dir of ancestors) {
+    for (const name of [...configNames, ...rootNames]) {
+      const path = join(dir, name)
+      let found: boolean
+      try {
+        const stat = statSync(path, { throwIfNoEntry: false })
+        found = !!stat && (rootNames.includes(name) || !stat.isDirectory() || readdirSync(path).length > 0)
+      } catch (error) {
+        throw new Error(`Sandbox isolation: cannot check ${path} (${(error as NodeJS.ErrnoException).code ?? error}). ${isolation}`)
+      }
+      if (found) {
+        const reason = name === "AGENTS.md" ? "would send it with the real turns"
+          : rootNames.includes(name) ? "would send every AGENTS.md up to it with the real turns" : "would load it as project config"
+        throw new Error(`Sandbox isolation: ${path} is above the sandbox and OpenCode ${reason}. ${isolation}`)
+      }
+    }
+  }
   const config = join(sandbox, "config", "opencode")
   const project = join(sandbox, "project")
   const install = join(sandbox, "install")
@@ -131,16 +165,6 @@ try {
   console.log(`Pinned binary: ${binary}`)
   const { OpenCode } = await import(join(install, "node_modules/@opencode/client/dist/promise/index.js"))
   const { ProfileSwitcherRpc } = await import(join(plugin, "dist/rpc.js"))
-  const alpha = { heavy: { model: "opencode/big-pickle", variant: "high" }, rest: { model: "opencode/nemotron-3.5-lightning-free" }, placements: { build: "heavy", plan: "heavy", explore: "rest", loose: "heavy", pinnedglobal: "heavy", pinneddefault: "rest", pinnedrepo: "heavy", pinnedmd: "heavy", phantom: "heavy" }, specifics: {} }
-  const beta = { heavy: { model: "opencode/space-bunny-free", variant: "low" }, rest: { model: "opencode/big-pickle" }, placements: { ...alpha.placements, build: "excluded" }, specifics: {} }
-  const profilesPath = join(config, "profiles.json")
-  json(profilesPath, { profiles: { alpha, beta }, active: "alpha", effective: {} })
-  json(join(config, "opencode.jsonc"), { plugins: ["*", join(plugin, "dist")], model: "opencode/space-bunny-free", agents: { pinneddefault: { model: "opencode/nemotron-3.5-lightning-free#default" }, pinnedglobal: { model: "opencode/space-bunny-free#high", prompt: "Global fixed agent" } } })
-  mkdirSync(join(project, ".opencode"), { recursive: true })
-  json(join(project, "opencode.jsonc"), { agents: { pinnedrepo: { model: "opencode/big-pickle#default", prompt: "Repo fixed agent" } } })
-  mkdirSync(join(config, "agents"), { recursive: true })
-  writeFileSync(join(config, "agents/pinnedmd.md"), "---\nmodel: opencode/space-bunny-free#max\n---\nPinned markdown agent.\n")
-  writeFileSync(join(config, "agents/loose.md"), "---\ndescription: Unpinned markdown agent\n---\nBe concise.\n")
   let baseUrl = ""
   const start = async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -170,6 +194,65 @@ try {
     ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
   }), headers: { Authorization: `Basic ${btoa(`opencode:${password}`)}` } })
   const location = { directory: project }
+  // Without a cached catalog, OpenCode boots from a snapshot bundled in its
+  // binary and fetches the live one (https://models.opencode.ai/api.json,
+  // logged as models.dev) in the background, so the catalog can change under
+  // a running scenario. A warm-up boot waits until this sandbox's server has
+  // cached the live catalog in its own database; later boots read that cache
+  // with fetching disabled, so the whole run sees one catalog. The location's
+  // first request starts the fetch.
+  const database = join(env.XDG_DATA_HOME, "opencode/opencode.db")
+  try {
+    await eventually(async signal => {
+      await client.model.list({ location, signal })
+      const db = new Database(database, { readonly: true })
+      try { return db.query("select 1 from kv where key = 'models-dev:catalog'").get() !== null }
+      finally { db.close() }
+    }, cached => cached, 60_000)
+  } catch (error) {
+    const failures = output.split("\n").filter(line => /Failed to (fetch|cache) models\.dev/.test(line))
+    throw new Error(`The sandbox server did not cache the models.dev catalog within 60s: ${failures.length ? failures.join("\n") : `no fetch failure in the server log (${error instanceof Error ? error.message : error})`}`)
+  }
+  await stop()
+  env.OPENCODE_DISABLE_MODELS_FETCH = "1"
+  await start()
+  const models = (await client.model.list({ location })).data
+  const hostDefault = (await client.model.default({ location })).data.id
+  await stop()
+  // Scenario models are chosen from that catalog: public models that need no
+  // credentials (provider opencode, every cost entry zero), active and enabled,
+  // oldest release first because new free models are the ones that rotate out.
+  const usable = models.filter((m: any) => m.providerID === "opencode" && m.status === "active" && m.enabled && m.cost.length > 0 && m.cost.every((c: any) => c.input === 0 && c.output === 0))
+    .sort((a: any, b: any) => a.time.released - b.time.released || a.id.localeCompare(b.id))
+  const named = (m: any): string[] => m.variants.map((v: any) => v.id).filter((id: string) => id !== "default")
+  const pick = (role: string, criterion: string, accept: (m: any) => boolean) => {
+    const found = usable.find(accept)
+    if (found) return found
+    throw new Error(`Catalog drift: the sandbox catalog of OpenCode ${version} no longer has a model that is ${criterion} (needed for ${role}). Free active opencode models, oldest first: ${JSON.stringify(usable.map((m: any) => [m.id, named(m)]))}; host default: ${hostDefault}`)
+  }
+  // No pick may be the host's own default, or a profile transform that did not
+  // run would be indistinguishable from one that did. Variantful needs two
+  // named variants so the config and frontmatter pins differ from beta's.
+  const variantfulModel = pick("beta heavy, the pinned agents and the named-variant turn", `free, active, offering at least two named variants and not the host default ${hostDefault}`, m => m.id !== hostDefault && named(m).length >= 2)
+  const variantful: string = variantfulModel.id
+  const plain: string = pick("alpha heavy with a variant it does not offer", `free, active, offering no variants and not the host default ${hostDefault}`, m => m.id !== hostDefault && m.variants.length === 0).id
+  const spare: string = pick("alpha rest", `free, active and none of ${variantful}, ${plain} or the host default ${hostDefault}`, m => ![hostDefault, variantful, plain].includes(m.id)).id
+  const variants = named(variantfulModel)
+  const [firstVariant, secondVariant, lastVariant] = [variants[0]!, variants[1]!, variants.at(-1)!]
+  const ref = (id: string) => `opencode/${id}`
+  const opencodeModel = (id: string, variant?: string) => variant === undefined ? { providerID: "opencode", id } : { providerID: "opencode", id, variant }
+  record("catalog-selection", { hostDefault, variantful, variants, plain, spare, usable: usable.map((m: any) => [m.id, named(m)]) })
+  const alpha = { heavy: { model: ref(plain), variant: "high" }, rest: { model: ref(spare) }, placements: { build: "heavy", plan: "heavy", explore: "rest", loose: "heavy", pinnedglobal: "heavy", pinneddefault: "rest", pinnedrepo: "heavy", pinnedmd: "heavy", phantom: "heavy" }, specifics: {} }
+  const beta = { heavy: { model: ref(variantful), variant: firstVariant }, rest: { model: ref(plain) }, placements: { ...alpha.placements, build: "excluded" }, specifics: {} }
+  const profilesPath = join(config, "profiles.json")
+  json(profilesPath, { profiles: { alpha, beta }, active: "alpha", effective: {} })
+  json(join(config, "opencode.jsonc"), { plugins: ["*", join(plugin, "dist")], model: ref(variantful), agents: { pinneddefault: { model: `${ref(spare)}#default` }, pinnedglobal: { model: `${ref(variantful)}#${secondVariant}`, prompt: "Global fixed agent" } } })
+  mkdirSync(join(project, ".opencode"), { recursive: true })
+  json(join(project, "opencode.jsonc"), { agents: { pinnedrepo: { model: `${ref(plain)}#default`, prompt: "Repo fixed agent" } } })
+  mkdirSync(join(config, "agents"), { recursive: true })
+  writeFileSync(join(config, "agents/pinnedmd.md"), `---\nmodel: ${ref(variantful)}#${lastVariant}\n---\nPinned markdown agent.\n`)
+  writeFileSync(join(config, "agents/loose.md"), "---\ndescription: Unpinned markdown agent\n---\nBe concise.\n")
+  await start()
   const rpc = client.rpc(ProfileSwitcherRpc)
   const status = (signal?: AbortSignal) => rpc.status({}, { location, signal })
   const agents = async () => (await client.agent.list({ location })).data
@@ -208,6 +291,7 @@ try {
     // in the background; agents answer before the package is loaded.
     const listed = await eventually(async signal => (await client.plugin.list({ location, signal })).data.filter((p: any) => p.source.type !== "builtin"),
       plugins => plugins.length > 0 && plugins.every((p: any) => ["active", "failed"].includes(p.state.status)), 180_000)
+    assert(listed.every((p: any) => p.state.status === "active"), `${npmSpec} did not load: ${JSON.stringify(listed)}`)
     // OpenCode 2.0.29 installs package plugins under its cache, keyed by
     // name@spec, with the bare name keyed as name@latest.
     const key = join(sandbox, "cache/opencode/npm", npmSpec === npmName ? `${npmName}@latest` : npmSpec)
@@ -227,9 +311,9 @@ try {
     const npmStatus = (signal?: AbortSignal) => npmRpc.status({}, { location, signal })
     assert.equal((await eventually(npmStatus, (s: any) => s.phase === "ready")).path, profilesPath)
     await npmRpc.switch({ profile: "alpha" }, { location })
-    assert.equal((await agents()).find((a: any) => a.id === "plan").model.id, "big-pickle")
+    assert.equal((await agents()).find((a: any) => a.id === "plan").model.id, plain)
     await npmRpc.switch({ profile: "beta" }, { location })
-    assert.deepEqual((await agents()).find((a: any) => a.id === "plan").model, { providerID: "opencode", id: "space-bunny-free", variant: "low" })
+    assert.deepEqual((await agents()).find((a: any) => a.id === "plan").model, opencodeModel(variantful, firstVariant))
     record("npm-rpc-switch")
     await withTui(async (terminal, screen) => {
       // Typing before the TUI has loaded its plugins loses the completion.
@@ -252,37 +336,39 @@ try {
   record("boot-status", boot)
   const list = await agents()
   const find = (id: string) => list.find((a: any) => a.id === id)
-  for (const id of ["build", "plan"]) assert.deepEqual(find(id).model, { providerID: "opencode", id: "big-pickle", variant: "high" })
-  assert.deepEqual(find("explore").model, { providerID: "opencode", id: "nemotron-3.5-lightning-free" })
-  for (const id of ["title", "summary", "compaction"]) { assert.equal(find(id).model.id, "nemotron-3.5-lightning-free"); assert.equal(find(id).hidden, true) }
-  assert.equal(find("loose").model.id, "big-pickle")
+  for (const id of ["build", "plan"]) assert.deepEqual(find(id).model, opencodeModel(plain, "high"))
+  assert.deepEqual(find("explore").model, opencodeModel(spare))
+  for (const id of ["title", "summary", "compaction"]) { assert.equal(find(id).model.id, spare); assert.equal(find(id).hidden, true) }
+  assert.equal(find("loose").model.id, plain)
   assert.equal(find("phantom"), undefined)
   assert.equal(boot.partial, true)
   assert.deepEqual([...boot.fixedByConfig].sort(), ["pinnedglobal", "pinnedmd", "pinnedrepo"])
   record("boot-agents", list.map((agent: any) => ({ id: agent.id, model: agent.model, hidden: agent.hidden })))
   const configuredDefault = await client.model.default({ location })
-  assert.equal(configuredDefault.data.id, "space-bunny-free")
+  assert.equal(configuredDefault.data.id, variantful)
   record("config-model-beats-catalog-transform", configuredDefault)
-  assert.deepEqual(find("pinnedglobal").model, { providerID: "opencode", id: "space-bunny-free", variant: "high" })
-  assert.deepEqual(find("pinnedrepo").model, { providerID: "opencode", id: "big-pickle", variant: "default" })
-  assert.deepEqual(find("pinnedmd").model, { providerID: "opencode", id: "space-bunny-free", variant: "max" })
-  assert.deepEqual(find("pinneddefault").model, { providerID: "opencode", id: "nemotron-3.5-lightning-free", variant: "default" })
+  assert.deepEqual(find("pinnedglobal").model, opencodeModel(variantful, secondVariant))
+  assert.deepEqual(find("pinnedrepo").model, opencodeModel(plain, "default"))
+  assert.deepEqual(find("pinnedmd").model, opencodeModel(variantful, lastVariant))
+  assert.deepEqual(find("pinneddefault").model, opencodeModel(spare, "default"))
   assert.deepEqual(boot.unapplied, [])
   assert.equal(find("title").model.variant, undefined)
   assert.equal(boot.agents.find((a: any) => a.id === "pinneddefault").fixedByConfig, false)
   record("variant-default-effective-equivalence", boot.agents.find((a: any) => a.id === "pinneddefault"))
   record("variant-on-disk", { repo: find("pinnedrepo").model, markdown: find("pinnedmd").model, omitted: find("title").model })
-  // The catalog lists Big Pickle with no named variants and Space Bunny with
-  // low; only agents that took the profile's big-pickle#high are warned about.
+  // The catalog lists plain with no variants and variantful with firstVariant;
+  // only agents that took the profile's plain#high are warned about.
   const catalog = (await client.model.list({ location })).data
   const offered = (id: string) => catalog.find((m: any) => m.providerID === "opencode" && m.id === id)?.variants.map((v: any) => v.id)
-  assert.deepEqual(offered("big-pickle"), [])
-  assert(offered("space-bunny-free")?.includes("low"))
+  // Selection read these from the same cache, so they confirm that the
+  // catalog stayed frozen across boots, not the catalog itself.
+  assert.deepEqual(offered(plain), [])
+  assert(offered(variantful)?.includes(firstVariant))
   assert.deepEqual(boot.unavailableVariants.map((v: any) => v.agent).sort(), ["build", "loose", "plan"])
-  for (const v of boot.unavailableVariants) assert.deepEqual({ model: v.model, variant: v.variant, offered: v.offered }, { model: "opencode/big-pickle", variant: "high", offered: [] })
+  for (const v of boot.unavailableVariants) assert.deepEqual({ model: v.model, variant: v.variant, offered: v.offered }, { model: ref(plain), variant: "high", offered: [] })
   assert.equal(find("build").model.variant, "high")
-  await eventually(async () => output, text => text.includes('variant not offered by the model, prompts will fail: "opencode/big-pickle#high"'), 5_000)
-  record("variant-not-offered-warning", { catalog: { "big-pickle": offered("big-pickle"), "space-bunny-free": offered("space-bunny-free") }, warnings: boot.unavailableVariants })
+  await eventually(async () => output, text => text.includes(`variant not offered by the model, prompts will fail: "${ref(plain)}#high"`), 5_000)
+  record("variant-not-offered-warning", { catalog: { [plain]: offered(plain), [variantful]: offered(variantful) }, warnings: boot.unavailableVariants })
   const abort = new AbortController()
   const events: unknown[] = []
   const unsubscribe = rpc.events.on("switched", (event: unknown) => events.push(event), { signal: abort.signal })
@@ -296,9 +382,9 @@ try {
     await eventually(async () => events, (e) => e.length > 0)
     assert.equal(server!.pid, pid)
     assert.equal(server!.exitCode, null)
-    assert.equal((await agents()).find((a: any) => a.id === "plan").model.id, "space-bunny-free")
-    assert.equal(switched.agents.find((a: any) => a.id === "build").model.id, "big-pickle")
-    // Beta's heavy space-bunny-free#low is offered; excluded build keeps big-pickle#high.
+    assert.equal((await agents()).find((a: any) => a.id === "plan").model.id, variantful)
+    assert.equal(switched.agents.find((a: any) => a.id === "build").model.id, plain)
+    // Beta's heavy variantful#firstVariant is offered; excluded build keeps plain#high.
     assert.deepEqual(switched.unavailableVariants.map((v: any) => [v.agent, v.placement]), [["build", "excluded"]])
     record("live-switch-event", events)
   } finally { abort.abort(); unsubscribe?.(); void stream }
@@ -311,7 +397,7 @@ try {
   assert.equal((await agents()).some((a: any) => a.id === "loose"), false)
   await rpc.switch({ profile: "beta" }, { location })
   record("markdown-deletion-no-ghost")
-  assert.deepEqual(read(profilesPath).effective.build, { model: "opencode/big-pickle", variant: "high" })
+  assert.deepEqual(read(profilesPath).effective.build, { model: ref(plain), variant: "high" })
   const globalConfig = read(join(config, "opencode.jsonc"))
   delete globalConfig.model
   json(join(config, "opencode.jsonc"), globalConfig)
@@ -319,13 +405,13 @@ try {
   await start()
   boot = await eventually(status, (s: any) => s.phase === "ready")
   assert.equal(boot.active, "beta")
-  assert.deepEqual(boot.agents.find((a: any) => a.id === "build").model, { providerID: "opencode", id: "big-pickle", variant: "high" })
+  assert.deepEqual(boot.agents.find((a: any) => a.id === "build").model, opencodeModel(plain, "high"))
   record("excluded-after-restart")
   const heavyDefault = await client.model.default({ location })
-  assert.equal(heavyDefault.data.id, "space-bunny-free")
+  assert.equal(heavyDefault.data.id, variantful)
   record("catalog-heavy-without-config-model", heavyDefault)
   const restarted = await agents()
-  for (const id of ["explore", "title", "summary", "compaction"]) assert.deepEqual(restarted.find((a: any) => a.id === id).model, { providerID: "opencode", id: "big-pickle" })
+  for (const id of ["explore", "title", "summary", "compaction"]) assert.deepEqual(restarted.find((a: any) => a.id === id).model, opencodeModel(plain))
   record("rest-distinct-from-catalog-after-restart", restarted.filter((a: any) => ["explore", "title", "summary", "compaction"].includes(a.id)).map((a: any) => ({ id: a.id, model: a.model, hidden: a.hidden })))
   // The wrapper observes the shipped TUI setup and actual keymap registration.
   // It does not replace the plugin with a fake registration.
@@ -382,36 +468,36 @@ export default { ...original, setup(ctx) {
   // Session metadata proves the next turn's selected model without asserting
   // nondeterministic response text. These models need no user credentials.
   await rpc.switch({ profile: "alpha" }, { location })
-  // Big Pickle has no named variants: high is valid agent metadata but is
+  // Plain has no named variants: high is valid agent metadata but is
   // rejected for inference by the host. Start its real turn with the default.
-  const session = await client.session.create({ agent: "plan", model: { providerID: "opencode", id: "big-pickle" }, location })
+  const session = await client.session.create({ agent: "plan", model: opencodeModel(plain), location })
   const turn = async (text: string) => {
     await client.session.prompt({ sessionID: session.id, text, location })
     await client.session.wait({ sessionID: session.id, location })
     return (await client.message.list({ sessionID: session.id, location })).data.filter((m: any) => m.type === "assistant")
   }
   const first = await turn("Reply with exactly ONE. Do not use tools.")
-  assert(first.some((m: any) => m.model.id === "big-pickle" && m.model.variant === "default" && !m.error), JSON.stringify(first))
+  assert(first.some((m: any) => m.model.id === plain && m.model.variant === "default" && !m.error), JSON.stringify(first))
   const switchedSession = await rpc.switch({ profile: "beta" }, { location })
   const beforeSwitchModel = await client.session.get({ sessionID: session.id, location })
-  assert.deepEqual(beforeSwitchModel.model, { providerID: "opencode", id: "big-pickle", variant: "default" })
+  assert.deepEqual(beforeSwitchModel.model, opencodeModel(plain, "default"))
   record("reload-preserves-open-session", beforeSwitchModel.model)
   const target = switchedSession.agents.find((a: any) => a.id === "plan").model
-  assert.deepEqual(target, { providerID: "opencode", id: "space-bunny-free", variant: "low" })
+  assert.deepEqual(target, opencodeModel(variantful, firstVariant))
   await client.session.switchModel({ sessionID: session.id, model: target, location })
   const second = await turn("Reply with exactly TWO. Do not use tools.")
-  assert(second.some((m: any) => m.model.id === "space-bunny-free" && m.model.variant === "low" && !m.error), JSON.stringify(second))
+  assert(second.some((m: any) => m.model.id === variantful && m.model.variant === firstVariant && !m.error), JSON.stringify(second))
   record("session-switchModel", second.map((message: any) => ({ id: message.id, model: message.model, finish: message.finish, error: message.error })))
   await stop()
-  globalConfig.model = "opencode/nemotron-3.5-lightning-free"
+  globalConfig.model = ref(spare)
   json(join(config, "opencode.jsonc"), globalConfig)
   const projectConfig = read(join(project, "opencode.jsonc"))
-  projectConfig.model = "opencode/big-pickle"
+  projectConfig.model = ref(plain)
   json(join(project, "opencode.jsonc"), projectConfig)
   await start()
   await eventually(status, (s: any) => s.phase === "ready")
   const repoDefault = await client.model.default({ location })
-  assert.equal(repoDefault.data.id, "big-pickle")
+  assert.equal(repoDefault.data.id, plain)
   record("repo-config-model-beats-global-and-profile", repoDefault.data.id)
   await stop()
   const override = join(sandbox, "override")
