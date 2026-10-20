@@ -83,9 +83,10 @@ the install steps:**
 [`packages/v2/README.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/packages/v2/README.md)
 ([raw](https://raw.githubusercontent.com/GinoNovello/opencode-profile-switcher/main/packages/v2/README.md)).
 In short: one `plugins` entry in `~/.config/opencode/opencode.jsonc`, either by
-package name (not verified) or pointing at a local build's `dist` (verified by
-the smoke harness, against opencode 2.0.29 only). The 1.x steps above are for
-1.x only.
+package name (`"opencode-profile-switcher-v2"`, or pinned as
+`"opencode-profile-switcher-v2@0.1.1"`; opencode downloads it from npm itself)
+or pointing at a local build's `dist`. Both are verified by the smoke harness,
+against opencode 2.0.29 only. The 1.x steps above are for 1.x only.
 
 **`profiles.json` on 2.x:** `$OPENCODE_CONFIG_DIR/profiles.json` when
 `OPENCODE_CONFIG_DIR` is set, otherwise the same path as 1.x. The 1.x package
@@ -113,8 +114,8 @@ ignores `OPENCODE_CONFIG_DIR`, so with that variable set the two packages read
 
 **Not verified on 2.x:** the wizard flow in the real TUI, footer rendering and
 focused-session switch from the TUI are manual checks; so are named variants
-beyond the harness's, interaction with `/models`, install by package name, and
-versions other than 2.0.29
+beyond the harness's, interaction with `/models`, and versions other than
+2.0.29
 ([`docs/testing-v2.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/docs/testing-v2.md)).
 
 ## Anti-patterns (do not)

@@ -1,6 +1,6 @@
 // Opt-in integration harness. No imports from the developer's OpenCode install.
 import { strict as assert } from "node:assert"
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -144,7 +144,8 @@ try {
         await eventually(async signal => {
           if (server!.exitCode !== null || server!.signalCode) throw new Error(startupOutput)
           return (await fetch(`${baseUrl}/api/server`, { signal })).status
-        }, code => code === 401)
+          // The first boot's database bootstrap can take over 25s on a slow disk.
+        }, code => code === 401, 120_000)
         return
       } catch (error) {
         await stop()
@@ -160,6 +161,63 @@ try {
   const rpc = client.rpc(ProfileSwitcherRpc)
   const status = (signal?: AbortSignal) => rpc.status({}, { location, signal })
   const agents = async () => (await client.agent.list({ location })).data
+  // Opt-in: load the published package by name instead of the copied dist.
+  // "1" means the unpinned name; any other value is used as the plugin spec.
+  // It runs before the dist scenarios and restores their files afterwards.
+  const npmSpec = process.env.SMOKE_V2_NPM === "1" ? "opencode-profile-switcher-v2" : process.env.SMOKE_V2_NPM
+  if (npmSpec) {
+    const distConfig = readFileSync(join(config, "opencode.jsonc"), "utf8")
+    const distProfiles = readFileSync(profilesPath, "utf8")
+    await stop()
+    json(join(config, "opencode.jsonc"), { ...JSON.parse(distConfig), plugins: ["*", npmSpec] })
+    await start()
+    // The location boots on its first request and installs package plugins
+    // in the background; agents answer before the package is loaded.
+    const listed = await eventually(async signal => (await client.plugin.list({ location, signal })).data.filter((p: any) => p.source.type !== "builtin"),
+      plugins => plugins.length > 0 && plugins.every((p: any) => ["active", "failed"].includes(p.state.status)), 180_000)
+    assert.deepEqual(listed.map((p: any) => [p.id, p.source, p.features, p.state.status]), [["opencode-profile-switcher-v2", { type: "package", target: npmSpec, version: listed[0]?.source.version }, { server: true, tui: true, rpc: true }, "active"]])
+    // OpenCode 2.0.29 installs package plugins under its cache, keyed by name@spec.
+    const key = join(sandbox, "cache/opencode/npm", npmSpec.includes("@") ? npmSpec : `${npmSpec}@latest`)
+    const generation = readdirSync(key).filter(name => /^\d+$/.test(name)).sort((a, b) => Number(a) - Number(b)).at(-1)!
+    const installedPlugin = join(key, generation, "node_modules/opencode-profile-switcher-v2")
+    assert.equal(read(join(installedPlugin, "package.json")).version, listed[0].source.version)
+    record("npm-install", { spec: npmSpec, directory: installedPlugin, version: listed[0].source.version })
+    const npmRpc = client.rpc((await import(join(installedPlugin, "dist/rpc.js"))).ProfileSwitcherRpc)
+    const npmStatus = (signal?: AbortSignal) => npmRpc.status({}, { location, signal })
+    assert.equal((await eventually(npmStatus, (s: any) => s.phase === "ready")).path, profilesPath)
+    await npmRpc.switch({ profile: "alpha" }, { location })
+    assert.equal((await agents()).find((a: any) => a.id === "plan").model.id, "big-pickle")
+    await npmRpc.switch({ profile: "beta" }, { location })
+    assert.deepEqual((await agents()).find((a: any) => a.id === "plan").model, { providerID: "opencode", id: "space-bunny-free", variant: "low" })
+    record("npm-rpc-switch")
+    let terminalOutput = ""
+    const terminal = new Bun.Terminal({ cols: 100, rows: 30, data(_terminal, data) { terminalOutput += new TextDecoder().decode(data) } })
+    const tui = Bun.spawn([binary, "--server", baseUrl, "--print-logs"], { cwd: project, env, terminal, detached: true })
+    children.add(tui)
+    const screen = async () => terminalOutput.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    try {
+      // Typing before the TUI has loaded its plugins loses the completion.
+      await eventually(async () => {
+        terminal.write("\u007f".repeat(8) + "/profile")
+        await Bun.sleep(1000)
+        return screen()
+      }, text => text.includes("Switch model profile"), 60_000)
+      terminal.write("\r")
+      terminal.write("\r")
+      await eventually(screen, text => text.includes("Model profile"), 15_000)
+      // Active beta is first; the next picker row is alpha.
+      terminal.write("\u001b[B\r")
+      await eventually(npmStatus, (s: any) => s.active === "alpha" && s.phase === "ready", 15_000)
+      record("npm-tui-profile-picker")
+    } catch (error) { throw new Error(`${error}\nTUI output: ${terminalOutput.slice(-8000)}`) }
+    finally {
+      try { await terminate(tui) } finally { terminal.close() }
+    }
+    await stop()
+    writeFileSync(join(config, "opencode.jsonc"), distConfig)
+    writeFileSync(profilesPath, distProfiles)
+    await start()
+  }
   await eventually(async () => (await fetch(`${baseUrl}/api/server`, { signal: AbortSignal.timeout(1000) })).status, code => code === 401)
   record("authenticated-private-server")
   let boot = await eventually(status, (s: any) => s.phase === "ready")

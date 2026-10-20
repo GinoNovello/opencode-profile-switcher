@@ -64,11 +64,12 @@ not register either entrypoint with opencode.
 `opencode-profile-switcher-v2` lives in [`packages/v2`](./packages/v2). Its
 install steps are in the package README,
 [`packages/v2/README.md`](./packages/v2/README.md): a `plugins` entry in
-`~/.config/opencode/opencode.jsonc`, either by package name (not verified) or
-pointing at a local build's `dist` (the setup the
-[v2 smoke harness](./docs/testing-v2.md) verifies, against opencode 2.0.29
-only). The package is published on npm; loading it by name has not been
-verified by the harness yet.
+`~/.config/opencode/opencode.jsonc`, either by package name
+(`"opencode-profile-switcher-v2"`, optionally pinned as
+`"opencode-profile-switcher-v2@0.1.1"`) or pointing at a local build's `dist`.
+The [v2 smoke harness](./docs/testing-v2.md) verifies both, against opencode
+2.0.29 only; loading by name downloads from npm and runs only when
+`SMOKE_V2_NPM` is set.
 
 v2 behaves differently from 1.x in a few places; see
 [Differences in opencode 2.x](#differences-in-opencode-2x).
@@ -258,15 +259,14 @@ none); the variant still reaches the agents placed as `heavy`.
 The [v2 smoke harness](./docs/testing-v2.md) runs against a real opencode
 2.0.29 (boot, RPC switching, config precedence, exclusions across restarts,
 `/profile` registration and the picker, a real turn before and after a switch,
-`OPENCODE_CONFIG_DIR`). It does not cover, and these remain manual checks or
-open questions:
+`OPENCODE_CONFIG_DIR`, and, opt-in, loading the npm package by name). It does
+not cover, and these remain manual checks or open questions:
 
 - the wizard flow in the real TUI, the footer rendering and switching the
   focused session from the TUI;
 - named reasoning variants other than the one the harness uses, and how a model
   picked with opencode's `/models` command interacts with a switch (the 1.x
   [TUI model override](#usage) caveat has not been checked on 2.x);
-- loading the package by name (as installed from npm);
 - opencode versions other than 2.0.29.
 
 ## Development

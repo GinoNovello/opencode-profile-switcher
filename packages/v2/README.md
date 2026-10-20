@@ -13,16 +13,21 @@ config by hand or restarting.
 Tested only against OpenCode **2.0.29**
 ([`docs/testing-v2.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/docs/testing-v2.md)).
 
-**By package name (not verified).** Add the package to `plugins` in
-`~/.config/opencode/opencode.jsonc` (`"*"` keeps OpenCode's built-in plugins).
-The package is published on npm, but loading it by name has not been tested
-yet:
+**By package name (tested).** Add the package to `plugins` in
+`~/.config/opencode/opencode.jsonc` (`"*"` keeps OpenCode's built-in plugins):
 
 ```jsonc
 {
   "plugins": ["*", "opencode-profile-switcher-v2"]
 }
 ```
+
+To pin a version, use `"opencode-profile-switcher-v2@0.1.1"`. OpenCode
+downloads the package from npm itself on first use; there is nothing to
+`bun add` or `npm install`. It keeps it under its cache,
+`$XDG_CACHE_HOME/opencode/npm/opencode-profile-switcher-v2@<spec>/`, where
+`<spec>` is `latest` for the bare name. The smoke harness checks both forms against OpenCode 2.0.29
+with `SMOKE_V2_NPM` set.
 
 **From a local build (tested).** This is the same way of loading the plugin
 (`plugins` pointing at a local `dist`) that the smoke harness verifies in its
@@ -47,9 +52,10 @@ point at `dist` itself, not the package root:
 
 Restart OpenCode and run `/profile`. The first run starts a setup wizard.
 
-In the tested setup that one `plugins` entry loads both the server and the TUI
-half (`/profile`, indicator); no `tui.json` or `cli.json` entry is needed, and
-also listing it in `cli.json` does not register `/profile` twice.
+With either form, that one `plugins` entry loads both the server and the TUI
+half (`/profile`, indicator); no `tui.json` or `cli.json` entry is needed. For
+the local build, also listing it in `cli.json` does not register `/profile`
+twice.
 
 ## Where `profiles.json` lives
 

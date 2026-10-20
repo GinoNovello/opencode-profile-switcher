@@ -90,6 +90,41 @@ It does not exercise the host's internal absent-versus-default comparison inside
 `switchModel`; the successful Big Pickle turn separately asserts session
 normalization.
 
+## Loading the published package by name (opt-in)
+
+Set `SMOKE_V2_NPM=1` to also load `opencode-profile-switcher-v2` from npm by
+its bare name, or set it to a full spec such as
+`SMOKE_V2_NPM=opencode-profile-switcher-v2@0.1.1` to pin a version. It is off
+by default because it downloads the published package, not the local build.
+The scenario runs first, in the same sandbox and isolated environment, with
+`plugins: ["*", "<spec>"]` in place of the copied `dist`, then restores the
+dist configuration and `profiles.json` for the scenarios above. It asserts:
+
+- `plugin.list` reports one non-builtin plugin, `opencode-profile-switcher-v2`,
+  from source `package` with the configured target, features `server`, `tui`
+  and `rpc`, and status `active`;
+- the package is installed at
+  `$XDG_CACHE_HOME/opencode/npm/<spec>/<generation>/node_modules/opencode-profile-switcher-v2`,
+  where the bare name is keyed as `<name>@latest`, with the version the host
+  reports;
+- the RPC (imported from that installed copy) reports `ready` against the
+  sandbox `profiles.json`, and two switches apply to the `plan` agent;
+- in a real TUI attached through the pty, `/profile` completes as
+  "Switch model profile", opens the picker, and selecting a profile there
+  changes the RPC's active profile.
+
+Both the bare name and `@0.1.1` passed against 2.0.29. How the host resolves
+a package entry comes from reading the pinned binary, not from a harness
+assertion: it installs the spec with npm's Arborist under the cache path above
+(no lifecycle scripts) and resolves the `<name>/server` export (falling back to
+`<name>`), `<name>/tui` and `<name>/rpc` from that directory. The host
+installs the package's peer dependencies with it, at the newest version in
+range: under 2.0.29 the installed tree had `@opencode/plugin` 2.0.32. A pin to
+another published version installs exactly that version (checked manually with
+`0.0.0-stage`, a release whose tarball has no `dist`). The package is
+installed in the background after the location's first request, so agents can
+answer before the plugin is loaded.
+
 ## Variant warning in the RPC status
 
 `status` (and the `switch` result) carries `unavailableVariants`: one entry
