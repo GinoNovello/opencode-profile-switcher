@@ -52,9 +52,33 @@ name: release
 #   bun install
 #   cd <package dir> && npm publish --access public [--tag next]
 #
-# Setup required once: add a repo secret NPM_TOKEN (npm > Access Tokens >
-# Automation token). Without it, CI still runs, but a publish run fails before
-# bumping anything.
+# Authentication: trusted publishing (OIDC) first, NPM_TOKEN as a fallback.
+# The publish job has `id-token: write` and runs npm >= 11.5.1, so `npm
+# publish` exchanges a GitHub OIDC token for a short-lived npm token, with no
+# stored secret, and npm attaches provenance on its own (public repo, public
+# package; no --provenance flag needed). Before bumping, the run tries that
+# exchange for the chosen package:
+#   - it works: the publish uses OIDC.
+#   - it fails and the repo secret NPM_TOKEN is set: the publish uses the
+#     token (no provenance), and the run says so with a warning.
+#   - it fails and there is no NPM_TOKEN: the run fails before bumping.
+# Trusted publishers can only be added to a package that is already on npm, so
+# a package's first publish needs NPM_TOKEN (or is done by hand).
+#
+# Setup required once per package, on npmjs.com (Packages > <package> >
+# Settings > Trusted publishing > GitHub Actions), for opencode-profile-switcher
+# and opencode-profile-switcher-v2:
+#   Organization or user: GinoNovello
+#   Repository:           opencode-profile-switcher
+#   Workflow filename:    release.yml
+#   Environment name:     (empty; this job uses no GitHub environment)
+#   Allowed actions:      npm publish (new configurations only allow
+#                         `npm stage publish` unless this is enabled)
+# The fields are case-sensitive and npm only checks them at publish time. A new
+# configuration expires if it has no successful publish within 2 days, so add
+# it right before dispatching. If this file is renamed, the trusted publishers
+# must be recreated with the new name. NPM_TOKEN can be removed once a publish
+# through OIDC has worked for both packages.
 
 on:
   push:
@@ -104,6 +128,9 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: write
+      # Lets npm request the GitHub OIDC token for trusted publishing. It only
+      # allows fetching that token; it grants no write access to anything.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -114,7 +141,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.0. Node
+          # 24.21.0 ships npm 11.19.0; an exact version keeps the npm used to
+          # publish fixed instead of whatever the latest 24.x bundles.
+          node-version: 24.21.0
+          # Writes an .npmrc that reads NODE_AUTH_TOKEN, used only when
+          # NPM_TOKEN is the fallback. A successful OIDC exchange overrides it.
           registry-url: https://registry.npmjs.org
 
       - run: bun install
@@ -162,8 +194,42 @@ jobs:
               ;;
           esac
 
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN is not set; nothing was bumped or published."
+          NPM_VERSION=$(npm --version)
+          if [ "$(printf '%s\n' 11.5.1 "$NPM_VERSION" | sort -V | head -n 1)" != 11.5.1 ]; then
+            echo "::error::npm $NPM_VERSION is older than 11.5.1, which trusted publishing needs; nothing was bumped or published."
+            exit 1
+          fi
+
+          # Try the same OIDC exchange `npm publish` will do, so a package
+          # without a trusted publisher is caught before bumping. The tokens
+          # never reach the shell or the log; only the outcome is printed.
+          # shellcheck disable=SC2016 # JS source, not shell expansions.
+          if REASON=$(node --input-type=module -e '
+            const name = process.argv[1]
+            const { ACTIONS_ID_TOKEN_REQUEST_URL: requestUrl, ACTIONS_ID_TOKEN_REQUEST_TOKEN: requestToken } = process.env
+            const fail = (message) => {
+              console.log(message)
+              process.exit(1)
+            }
+            if (!requestUrl || !requestToken) fail("no GitHub OIDC token available (is id-token: write set?)")
+            const url = new URL(requestUrl)
+            url.searchParams.append("audience", "npm:registry.npmjs.org")
+            const id = await fetch(url, { headers: { Authorization: `Bearer ${requestToken}` } })
+              .catch((error) => fail(`could not request the GitHub OIDC token (${error.message})`))
+            if (!id.ok) fail(`GitHub refused the OIDC token request (HTTP ${id.status})`)
+            const { value } = await id.json()
+            if (!value) fail("GitHub returned no OIDC token")
+            const exchange = await fetch(
+              `https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${name.replace("/", "%2f")}`,
+              { method: "POST", headers: { Authorization: `Bearer ${value}` } },
+            ).catch((error) => fail(`could not reach npm for the OIDC exchange (${error.message})`))
+            if (!exchange.ok) fail(`npm refused the OIDC exchange for ${name} (HTTP ${exchange.status}); check its trusted publisher on npmjs.com`)
+          ' "$NAME"); then
+            echo "::notice::Publishing $NAME with trusted publishing (OIDC); npm adds provenance."
+          elif [ -n "$NPM_TOKEN" ]; then
+            echo "::warning::Trusted publishing is not available for $NAME: $REASON. Falling back to NPM_TOKEN (no provenance)."
+          else
+            echo "::error::Trusted publishing is not available for $NAME: $REASON. NPM_TOKEN is not set either; nothing was bumped or published."
             exit 1
           fi
 
@@ -242,7 +308,7 @@ jobs:
 
           if ! (cd "$DIR" && npm publish "${PUBLISH[@]}"); then
             echo "::error::$TAG was pushed to main but npm publish of $NAME@$VERSION failed. Do not dispatch again (it would skip $VERSION); publish $TAG by hand as shown in the log."
-            echo "To publish $NAME@$VERSION from the tagged commit, with an npm token for $NAME:"
+            echo "To publish $NAME@$VERSION from the tagged commit, logged in to npm (npm login) as a maintainer of $NAME:"
             echo "  git fetch --tags && git checkout '$TAG'"
             echo "  bun install"
             if [ "$DIR" != "." ]; then echo "  cd $DIR"; fi
