@@ -2,8 +2,9 @@
 
 Self-contained install guide for
 [`opencode-profile-switcher`](https://www.npmjs.com/package/opencode-profile-switcher).
-An agent that fetches **only this file** has everything needed to install and
-verify the plugin.
+For opencode 1.x, an agent that fetches **only this file** has everything
+needed to install and verify the plugin; for opencode 2.x it links to the v2
+package README, which has the install steps.
 
 **What it does:** define **model profiles** (one model per capability tier,
 applied to every agent at once) and **switch them live from the UI** without

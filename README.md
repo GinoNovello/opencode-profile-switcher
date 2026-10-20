@@ -12,7 +12,8 @@ Built for people who mix providers (e.g. xAI + GLM) and otherwise have to change
 > **Agents:** fetch and follow the self-contained install guide
 > [`docs/README.opencode.md`](./docs/README.opencode.md)
 > ([raw](https://raw.githubusercontent.com/GinoNovello/opencode-profile-switcher/main/docs/README.opencode.md)).
-> It has everything needed to install and verify this plugin from a single Markdown file.
+> For opencode 1.x it has everything needed to install and verify this plugin from a single Markdown file;
+> for opencode 2.x it links to the v2 package README, which has the install steps.
 
 opencode 1.x and 2.x have incompatible plugin APIs, so there are two packages
 built from this repository ([ADR-0004](./docs/adr/0004-v2-se-publica-como-paquete-hermano.md)).
