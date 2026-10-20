@@ -58,7 +58,12 @@ name: release
 # stored secret, and npm attaches provenance on its own (public repo, public
 # package; no --provenance flag needed). Before bumping, the run tries that
 # exchange for the chosen package:
-#   - it works: the publish uses OIDC.
+#   - it works: the publish uses OIDC. The exchange only checks the owner,
+#     repository, workflow and environment; it cannot see the trusted
+#     publisher's "Allowed actions". If "npm publish" is not enabled there,
+#     the publish fails after the push and needs the manual recovery, even
+#     with NPM_TOKEN set: once the exchange works, npm uses the OIDC token
+#     instead of the .npmrc one.
 #   - it fails and the repo secret NPM_TOKEN is set: the publish uses the
 #     token (no provenance), and the run says so with a warning.
 #   - it fails and there is no NPM_TOKEN: the run fails before bumping.
@@ -72,8 +77,9 @@ name: release
 #   Repository:           opencode-profile-switcher
 #   Workflow filename:    release.yml
 #   Environment name:     (empty; this job uses no GitHub environment)
-#   Allowed actions:      npm publish (new configurations only allow
-#                         `npm stage publish` unless this is enabled)
+#   Allowed actions:      enable "npm publish" (REQUIRED: new configurations
+#                         only allow `npm stage publish`, and the check before
+#                         bumping cannot tell; see above)
 # The fields are case-sensitive and npm only checks them at publish time. A new
 # configuration expires if it has no successful publish within 2 days, so add
 # it right before dispatching. If this file is renamed, the trusted publishers
@@ -203,6 +209,10 @@ jobs:
           # Try the same OIDC exchange `npm publish` will do, so a package
           # without a trusted publisher is caught before bumping. The tokens
           # never reach the shell or the log; only the outcome is printed.
+          # This copies npm's own exchange (lib/utils/oidc.js in npm 11.19.0),
+          # an internal registry endpoint rather than a documented API. If npm
+          # changes it, this check fails safe: a false warning or error before
+          # bumping, never a half-published release.
           # shellcheck disable=SC2016 # JS source, not shell expansions.
           if REASON=$(node --input-type=module -e '
             const name = process.argv[1]
@@ -214,18 +224,28 @@ jobs:
             if (!requestUrl || !requestToken) fail("no GitHub OIDC token available (is id-token: write set?)")
             const url = new URL(requestUrl)
             url.searchParams.append("audience", "npm:registry.npmjs.org")
-            const id = await fetch(url, { headers: { Authorization: `Bearer ${requestToken}` } })
+            const idResponse = await fetch(url, { headers: { Authorization: `Bearer ${requestToken}` } })
               .catch((error) => fail(`could not request the GitHub OIDC token (${error.message})`))
-            if (!id.ok) fail(`GitHub refused the OIDC token request (HTTP ${id.status})`)
-            const { value } = await id.json()
-            if (!value) fail("GitHub returned no OIDC token")
+            if (!idResponse.ok) fail(`GitHub refused the OIDC token request (HTTP ${idResponse.status})`)
+            const idBody = await idResponse.json()
+              .catch(() => fail("GitHub answered the OIDC token request with a body that is not JSON"))
+            const idToken = idBody?.value
+            if (!idToken) fail("GitHub returned no OIDC token")
             const exchange = await fetch(
               `https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${name.replace("/", "%2f")}`,
-              { method: "POST", headers: { Authorization: `Bearer ${value}` } },
+              { method: "POST", headers: { Authorization: `Bearer ${idToken}` } },
             ).catch((error) => fail(`could not reach npm for the OIDC exchange (${error.message})`))
-            if (!exchange.ok) fail(`npm refused the OIDC exchange for ${name} (HTTP ${exchange.status}); check its trusted publisher on npmjs.com`)
+            const body = await exchange.json().catch(() => undefined)
+            if (!exchange.ok) {
+              const message = typeof body?.message === "string" ? `: ${body.message.replace(/\s+/g, " ")}` : ""
+              fail(`npm refused the OIDC exchange for ${name} (HTTP ${exchange.status}${message}); check its trusted publisher on npmjs.com`)
+            }
+            if (body === undefined) fail(`npm answered the OIDC exchange for ${name} with a body that is not JSON`)
+            // npm only uses the exchange when it returns a token; without one
+            // it falls back to the .npmrc token. The token is not printed.
+            if (!body?.token) fail(`npm accepted the OIDC exchange for ${name} but returned no token`)
           ' "$NAME"); then
-            echo "::notice::Publishing $NAME with trusted publishing (OIDC); npm adds provenance."
+            echo "::notice::Trusted publishing (OIDC) works for $NAME; npm publish will use it and add provenance. This check cannot see the trusted publisher's Allowed actions: if \"npm publish\" is not enabled there, the publish fails after the push, even with NPM_TOKEN set."
           elif [ -n "$NPM_TOKEN" ]; then
             echo "::warning::Trusted publishing is not available for $NAME: $REASON. Falling back to NPM_TOKEN (no provenance)."
           else
