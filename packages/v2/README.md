@@ -46,6 +46,10 @@ point at `dist` itself, not the package root:
 
 Restart OpenCode and run `/profile`. The first run starts a setup wizard.
 
+In the tested setup that one `plugins` entry loads both the server and the TUI
+half (`/profile`, indicator); no `tui.json` or `cli.json` entry is needed, and
+also listing it in `cli.json` does not register `/profile` twice.
+
 ## Where `profiles.json` lives
 
 v2 reads `$OPENCODE_CONFIG_DIR/profiles.json` when `OPENCODE_CONFIG_DIR` is set.
