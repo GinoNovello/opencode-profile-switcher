@@ -5,6 +5,7 @@ import { createSignal } from "solid-js"
 import { formatProfileIndicator } from "../../../src/core/indicator.js"
 import { buildPickerOptions } from "../../../src/core/picker.js"
 import type { ProfilesFile } from "../../../src/core/schema.js"
+import { describeUnavailableVariants } from "./apply.js"
 import { ProfileSwitcherRpc, type StatusOutput, type SaveProfilesOutput } from "./rpc.js"
 import { mapProviders } from "./tui-models.js"
 import { configureProfile, editProfile } from "./tui-wizard.js"
@@ -14,7 +15,16 @@ export function switchMessage(status: StatusOutput): string {
   if (status.partial) details.push(`parcial — fixed by config: ${status.fixedByConfig.join(", ")}`)
   if (status.invalidSlots.length) details.push(`Invalid slots: ${status.invalidSlots.map((slot) => `${slot.agent ?? slot.placement}: ${slot.model}`).join(", ")}`)
   if (status.unapplied.length) details.push(`Unapplied: ${status.unapplied.join(", ")}`)
+  // Absent from a server older than this field.
+  const variants = status.unavailableVariants ?? []
+  if (variants.length) details.push(`Variant not offered, prompts will fail: ${describeUnavailableVariants(variants)}`)
   return details.join(" · ")
+}
+
+/** Whether the switch toast should warn rather than confirm. */
+export function switchWarns(status: StatusOutput): boolean {
+  return status.partial || status.invalidSlots.length > 0 || status.unapplied.length > 0
+    || (status.unavailableVariants ?? []).length > 0
 }
 
 export function setupTui(ctx: Context): () => void {
@@ -110,7 +120,7 @@ export function setupTui(ctx: Context): () => void {
     setSnapshot(result)
     await sessionModel(result, at)
     if (disposed) return
-    ctx.ui.toast.show({ message: switchMessage(result), variant: result.partial || result.invalidSlots.length > 0 || result.unapplied.length > 0 ? "warning" : "success" })
+    ctx.ui.toast.show({ message: switchMessage(result), variant: switchWarns(result) ? "warning" : "success" })
     await refresh(at, true)
   }
   const run = async () => {

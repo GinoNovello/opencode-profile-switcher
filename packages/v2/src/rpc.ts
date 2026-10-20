@@ -54,6 +54,23 @@ export interface InvalidSlot {
 }
 
 /**
+ * An agent that took a profile model whose variant the model does not offer
+ * according to opencode's model catalog (`ModelInfo.variants`). The host accepts
+ * it on the agent but fails on the next prompt (`VariantUnavailableError`). A
+ * warning only: the model is applied as the profile says. Never reported for an
+ * omitted or `default` variant, nor for a model the catalog does not list.
+ */
+export interface UnavailableVariant {
+  agent: string
+  placement: PlacementName | null
+  /** `provider/model`. */
+  model: string
+  variant: string
+  /** The variants the catalog offers for `model`; empty when it offers none. */
+  offered: string[]
+}
+
+/**
  * Where the server is with the location's agents:
  * - `pending` — learning the agent ids and applying the profile (boot or switch).
  * - `ready`   — applied; `agents`, `fixedByConfig` and `partial` describe it.
@@ -94,6 +111,11 @@ export interface StatusOutput {
   unassigned: string[]
   /** Slots of the active profile that cannot be applied. */
   invalidSlots: InvalidSlot[]
+  /**
+   * Agents applied with a variant their model does not offer. Empty unless
+   * `ready`, and empty when the catalog could not be read.
+   */
+  unavailableVariants: UnavailableVariant[]
   /** Empty unless `ready`. */
   agents: AgentStatus[]
 }
@@ -161,6 +183,20 @@ const status = {
         required: ["placement", "agent", "model"],
       },
     },
+    unavailableVariants: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          agent: { type: "string" },
+          placement: {},
+          model: { type: "string" },
+          variant: { type: "string" },
+          offered: strings,
+        },
+        required: ["agent", "placement", "model", "variant", "offered"],
+      },
+    },
     agents: {
       type: "array",
       items: {
@@ -190,6 +226,7 @@ const status = {
     "unapplied",
     "unassigned",
     "invalidSlots",
+    "unavailableVariants",
     "agents",
   ],
 } as const

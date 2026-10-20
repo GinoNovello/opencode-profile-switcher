@@ -22,7 +22,7 @@
     },
     "packages/v2": {
       "name": "opencode-profile-switcher-v2",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "zod": "^4.1.8",
       },

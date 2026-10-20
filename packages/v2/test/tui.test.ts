@@ -3,7 +3,7 @@ import { testRender } from "@opentui/solid"
 import { jsx } from "@opentui/solid/jsx-runtime"
 import { EventEmitter } from "node:events"
 import type { Plugin } from "@opencode/plugin/tui"
-import { setupTui, switchMessage } from "../src/tui-plugin.js"
+import { setupTui, switchMessage, switchWarns } from "../src/tui-plugin.js"
 import { ProfileSwitcherRpc, type StatusOutput } from "../src/rpc.js"
 import type { RpcClient, RpcEventPayload } from "@opencode/client"
 import type { ProfilesFile } from "../../../src/core/schema.js"
@@ -11,7 +11,7 @@ import type { ProfilesFile } from "../../../src/core/schema.js"
 const profile = { heavy: { model: "p/heavy", variant: "max" }, rest: { model: "p/rest" }, placements: {}, specifics: {} }
 const file: ProfilesFile = { active: "one", profiles: { one: profile, two: profile }, effective: {} }
 function status(overrides: Partial<StatusOutput> = {}): StatusOutput {
-  return { ready: true, phase: "ready", path: "/fake/profiles.json", profiles: ["one", "two"], active: "one", applied: true, reason: null, error: null, partial: false, fixedByConfig: [], unapplied: [], unassigned: [], invalidSlots: [], agents: [{ id: "custom", placement: "heavy", planned: { providerID: "p", id: "heavy", variant: "max" }, model: { providerID: "config", id: "effective", variant: "high" }, fixedByConfig: true }], ...overrides }
+  return { ready: true, phase: "ready", path: "/fake/profiles.json", profiles: ["one", "two"], active: "one", applied: true, reason: null, error: null, partial: false, fixedByConfig: [], unapplied: [], unassigned: [], invalidSlots: [], unavailableVariants: [], agents: [{ id: "custom", placement: "heavy", planned: { providerID: "p", id: "heavy", variant: "max" }, model: { providerID: "config", id: "effective", variant: "high" }, fixedByConfig: true }], ...overrides }
 }
 function fake(route: { type: string; sessionID?: string } = { type: "session", sessionID: "focused" }, initialStatus?: () => Promise<StatusOutput>) {
   const calls: unknown[][] = []
@@ -89,6 +89,14 @@ describe("v2 /profile", () => {
     expect(host.toasts.at(-1)?.message).toContain("Other tabs keep their models")
     host.cleanup()
   })
+  test("warns after switching to a profile with a variant its model does not offer, and still switches the session", async () => {
+    const host = fake(); await tick()
+    host.state(status({ unavailableVariants: [{ agent: "custom", placement: "heavy", model: "p/heavy", variant: "max", offered: ["low"] }] }))
+    await host.run()
+    expect(host.calls.map(([name]) => name)).toContain("switchModel")
+    expect(host.toasts.at(-1)).toEqual({ variant: "warning", message: expect.stringContaining('Variant not offered, prompts will fail: "p/heavy#max" for custom (offers: low)') })
+    host.cleanup()
+  })
   for (const type of ["home", "custom"]) test(`does not write a session on the ${type} route`, async () => {
     const host = fake({ type }); await tick(); await host.run()
     expect(host.calls.map(([name]) => name)).not.toContain("switchModel")
@@ -131,6 +139,15 @@ describe("v2 /profile", () => {
     expect(switchMessage(status({ partial: true, fixedByConfig: ["custom"], unapplied: ["title"], invalidSlots: [{ placement: "heavy", agent: null, model: "bad" }] }))).toContain("parcial — fixed by config: custom")
     expect(switchMessage(status({ unapplied: ["title"] }))).toContain("Unapplied: title")
     expect(switchMessage(status({ invalidSlots: [{ placement: "heavy", agent: null, model: "bad" }] }))).toContain("Invalid slots: heavy: bad")
+    const unavailable = status({ unavailableVariants: [{ agent: "build", placement: "heavy", model: "opencode/big-pickle", variant: "high", offered: [] }] })
+    expect(switchMessage(unavailable)).toContain('Variant not offered, prompts will fail: "opencode/big-pickle#high" for build (offers: none)')
+    expect(switchWarns(unavailable)).toBe(true)
+    expect(switchWarns(status())).toBe(false)
+    // A server older than the field.
+    const legacy = status() as Partial<StatusOutput>
+    delete legacy.unavailableVariants
+    expect(switchMessage(legacy as StatusOutput)).not.toContain("Variant")
+    expect(switchWarns(legacy as StatusOutput)).toBe(false)
   })
 })
 
