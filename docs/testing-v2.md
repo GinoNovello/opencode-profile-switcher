@@ -90,6 +90,68 @@ It does not exercise the host's internal absent-versus-default comparison inside
 `switchModel`; the successful Big Pickle turn separately asserts session
 normalization.
 
+## Loading the published package by name (opt-in)
+
+Set `SMOKE_V2_NPM=1` to also load `opencode-profile-switcher-v2` from npm by
+its bare name, or set it to a full spec such as
+`SMOKE_V2_NPM=opencode-profile-switcher-v2@0.1.1` to pin a version. It is off
+by default because it downloads the published package, not the local build.
+The scenario runs first, in the same sandbox and isolated environment, with
+`plugins: ["*", "<spec>"]` in place of the copied `dist`, then restores the
+dist configuration and `profiles.json` for the scenarios above. It asserts:
+
+- the package is installed at
+  `$XDG_CACHE_HOME/opencode/npm/<spec>/<generation>/node_modules/opencode-profile-switcher-v2`,
+  where `<spec>` is the `plugins` entry and the bare name is keyed as
+  `opencode-profile-switcher-v2@latest`;
+- `plugin.list` reports one non-builtin plugin, `opencode-profile-switcher-v2`,
+  from source `package` with the configured target and the installed
+  `package.json` version, features `server`, `tui` and `rpc`, and status
+  `active`;
+- with an exact version in the spec, the installed `package.json` has that
+  version;
+- the server log has `msg="loading plugin"` with that target and
+  `entrypoint=file://<installed copy>/dist/server.js`, and does not mention the
+  dist copied into the install (the TUI logs its entrypoint only at debug
+  level, so its copy is not asserted);
+- the RPC (imported from that installed copy) reports `ready` against the
+  sandbox `profiles.json`, and two switches apply to the `plan` agent;
+- in a real TUI attached through the pty, `/profile` completes as
+  "Switch model profile", opens the picker, and selecting a profile there
+  changes the RPC's active profile.
+
+`SMOKE_V2_NPM` accepts only `1` or a spec starting with
+`opencode-profile-switcher-v2`; any other value fails before anything is
+installed. Both the bare name and `@0.1.1` passed against 2.0.29.
+
+Checked by hand, not asserted by the harness:
+
+- `0.1.1` is also `latest`, so the pinned run cannot tell a respected pin from
+  latest. A pin to another published version, `0.0.0-stage`, installed exactly
+  that version under the key `opencode-profile-switcher-v2@0.0.0-stage` (that
+  release's tarball has no `dist`, so it does not load).
+- Observed in a manual run: the host installs the package's peer dependencies
+  with it at the newest version in range; under 2.0.29 the installed tree had
+  `@opencode/plugin` 2.0.32.
+
+From reading the pinned binary: the host installs the spec with npm's Arborist
+under the cache path above (no lifecycle scripts), where the cache is
+`$XDG_CACHE_HOME/opencode`, or `~/.cache/opencode` without `XDG_CACHE_HOME`. It
+resolves the `<name>/server` export (falling back to `<name>`), `<name>/tui`
+and `<name>/rpc` from that directory. The package is installed in the
+background after the location's first request, so agents can answer before the
+plugin is loaded.
+
+Pending: because of the catalog drift in
+[#61](https://github.com/GinoNovello/opencode-profile-switcher/issues/61), the
+harness stops at `config-model-beats-catalog-transform`, so the dist
+scenarios after it have not run after this scenario in the committed harness.
+A copy outside the repository with the catalog-dependent asserts turned into
+logs ran to the end with `SMOKE_V2_NPM=1`, including the TUI probes, so the
+state the npm server and TUI leave in the sandbox's `XDG_STATE_HOME` and
+`XDG_DATA_HOME` did not affect them there. Rerun the real harness with
+`SMOKE_V2_NPM=1` once #61 is fixed before considering this scenario done.
+
 ## Variant warning in the RPC status
 
 `status` (and the `switch` result) carries `unavailableVariants`: one entry

@@ -13,16 +13,26 @@ config by hand or restarting.
 Tested only against OpenCode **2.0.29**
 ([`docs/testing-v2.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/docs/testing-v2.md)).
 
-**By package name (not verified).** Add the package to `plugins` in
-`~/.config/opencode/opencode.jsonc` (`"*"` keeps OpenCode's built-in plugins).
-The package is published on npm, but loading it by name has not been tested
-yet:
+**By package name (tested).** Add the package to `plugins` in
+`~/.config/opencode/opencode.jsonc` (`"*"` keeps OpenCode's built-in plugins):
 
 ```jsonc
 {
   "plugins": ["*", "opencode-profile-switcher-v2"]
 }
 ```
+
+To pin a version, use `"opencode-profile-switcher-v2@0.1.1"`. OpenCode
+downloads the package from npm itself; there is nothing to `bun add` or
+`npm install`. It installs it in the background the first time it opens a
+project with this entry, so on that first start `/profile` can take a moment
+to appear. It keeps the package in `$XDG_CACHE_HOME/opencode/npm/<spec>/`
+(`~/.cache/opencode/npm/<spec>/` when `XDG_CACHE_HOME` is not set), where
+`<spec>` is the `plugins` entry; the bare name is stored as
+`opencode-profile-switcher-v2@latest`. The smoke harness checks both forms
+against OpenCode 2.0.29 when `SMOKE_V2_NPM` is set; what it asserts and what
+was checked by hand is in
+[`docs/testing-v2.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/docs/testing-v2.md#loading-the-published-package-by-name-opt-in).
 
 **From a local build (tested).** This is the same way of loading the plugin
 (`plugins` pointing at a local `dist`) that the smoke harness verifies in its
@@ -47,9 +57,11 @@ point at `dist` itself, not the package root:
 
 Restart OpenCode and run `/profile`. The first run starts a setup wizard.
 
-In the tested setup that one `plugins` entry loads both the server and the TUI
-half (`/profile`, indicator); no `tui.json` or `cli.json` entry is needed, and
-also listing it in `cli.json` does not register `/profile` twice.
+With either form, that one `plugins` entry loads both the server and the TUI
+half; no `tui.json` or `cli.json` entry is needed. The harness checks
+`/profile` and its picker with either form; the footer indicator is a manual
+check. For the local build, also listing it in `cli.json` does not register
+`/profile` twice.
 
 ## Where `profiles.json` lives
 
