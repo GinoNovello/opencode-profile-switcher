@@ -86,7 +86,8 @@ In short: one `plugins` entry in `~/.config/opencode/opencode.jsonc`, either by
 package name (`"opencode-profile-switcher-v2"`, or pinned as
 `"opencode-profile-switcher-v2@0.1.1"`; opencode downloads it from npm itself)
 or pointing at a local build's `dist`. Both are verified by the smoke harness,
-against opencode 2.0.29 only. The 1.x steps above are for 1.x only.
+against opencode 2.0.29 only; the by-name check is opt-in (`SMOKE_V2_NPM`) and
+needs network access to npm. The 1.x steps above are for 1.x only.
 
 **`profiles.json` on 2.x:** `$OPENCODE_CONFIG_DIR/profiles.json` when
 `OPENCODE_CONFIG_DIR` is set, otherwise the same path as 1.x. The 1.x package

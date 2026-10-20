@@ -23,11 +23,16 @@ Tested only against OpenCode **2.0.29**
 ```
 
 To pin a version, use `"opencode-profile-switcher-v2@0.1.1"`. OpenCode
-downloads the package from npm itself on first use; there is nothing to
-`bun add` or `npm install`. It keeps it under its cache,
-`$XDG_CACHE_HOME/opencode/npm/opencode-profile-switcher-v2@<spec>/`, where
-`<spec>` is `latest` for the bare name. The smoke harness checks both forms against OpenCode 2.0.29
-with `SMOKE_V2_NPM` set.
+downloads the package from npm itself; there is nothing to `bun add` or
+`npm install`. It installs it in the background the first time it opens a
+project with this entry, so on that first start `/profile` can take a moment
+to appear. It keeps the package in `$XDG_CACHE_HOME/opencode/npm/<spec>/`
+(`~/.cache/opencode/npm/<spec>/` when `XDG_CACHE_HOME` is not set), where
+`<spec>` is the `plugins` entry; the bare name is stored as
+`opencode-profile-switcher-v2@latest`. The smoke harness checks both forms
+against OpenCode 2.0.29 when `SMOKE_V2_NPM` is set; what it asserts and what
+was checked by hand is in
+[`docs/testing-v2.md`](https://github.com/GinoNovello/opencode-profile-switcher/blob/main/docs/testing-v2.md#loading-the-published-package-by-name-opt-in).
 
 **From a local build (tested).** This is the same way of loading the plugin
 (`plugins` pointing at a local `dist`) that the smoke harness verifies in its
@@ -53,9 +58,10 @@ point at `dist` itself, not the package root:
 Restart OpenCode and run `/profile`. The first run starts a setup wizard.
 
 With either form, that one `plugins` entry loads both the server and the TUI
-half (`/profile`, indicator); no `tui.json` or `cli.json` entry is needed. For
-the local build, also listing it in `cli.json` does not register `/profile`
-twice.
+half; no `tui.json` or `cli.json` entry is needed. The harness checks
+`/profile` and its picker with either form; the footer indicator is a manual
+check. For the local build, also listing it in `cli.json` does not register
+`/profile` twice.
 
 ## Where `profiles.json` lives
 

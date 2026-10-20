@@ -6,6 +6,13 @@ import { join, resolve } from "node:path"
 
 const version = "2.0.29"
 const repo = resolve(import.meta.dir, "..")
+// Opt-in npm scenario: "1" means the unpinned name; otherwise the value is
+// the plugin spec. Validated before anything is installed.
+const npmName = "opencode-profile-switcher-v2"
+const npmSpec = process.env.SMOKE_V2_NPM === "1" ? npmName : process.env.SMOKE_V2_NPM
+if (npmSpec && npmSpec !== npmName && !npmSpec.startsWith(`${npmName}@`)) {
+  throw new Error(`SMOKE_V2_NPM must be 1 or a spec for ${npmName} (e.g. ${npmName}@0.1.1), got ${JSON.stringify(npmSpec)}`)
+}
 let sandbox: string | undefined
 let server: ReturnType<typeof Bun.spawn> | undefined
 let output = ""
@@ -38,6 +45,8 @@ for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
   process.on(signal, () => { void cleanup().catch(console.error).finally(() => process.exit(code)) })
 }
 class OfflineSkip extends Error {}
+// A probe throws this when retrying cannot help, e.g. the server exited.
+class Fatal extends Error {}
 async function bounded<T>(work: Promise<T>, timeout: number, description: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -60,7 +69,10 @@ async function eventually<T>(probe: (signal: AbortSignal) => Promise<T>, accept:
       const value = await bounded(probe(AbortSignal.timeout(attempt)), attempt, "Probe")
       last = value
       if (accept(value)) return value
-    } catch (error) { last = error }
+    } catch (error) {
+      if (error instanceof Fatal) throw error
+      last = error
+    }
     await Bun.sleep(Math.min(100, Math.max(0, until - Date.now())))
   }
   throw new Error(`Timed out after ${timeout}ms: ${last instanceof Error ? last.message : JSON.stringify(last)}`)
@@ -141,10 +153,10 @@ try {
       children.add(server)
       for (const stream of [server.stdout, server.stderr]) void (async () => { for await (const chunk of stream as ReadableStream<Uint8Array>) { const text = new TextDecoder().decode(chunk); output += text; startupOutput += text } })()
       try {
+        // The first boot's database bootstrap can take over 25s on a slow disk.
         await eventually(async signal => {
-          if (server!.exitCode !== null || server!.signalCode) throw new Error(startupOutput)
+          if (server!.exitCode !== null || server!.signalCode) throw new Fatal(startupOutput)
           return (await fetch(`${baseUrl}/api/server`, { signal })).status
-          // The first boot's database bootstrap can take over 25s on a slow disk.
         }, code => code === 401, 120_000)
         return
       } catch (error) {
@@ -161,27 +173,56 @@ try {
   const rpc = client.rpc(ProfileSwitcherRpc)
   const status = (signal?: AbortSignal) => rpc.status({}, { location, signal })
   const agents = async () => (await client.agent.list({ location })).data
+  // Runs a real TUI attached to the private server through a pty.
+  const withTui = async (run: (terminal: Bun.Terminal, screen: () => Promise<string>) => Promise<void>) => {
+    let terminalOutput = ""
+    const terminal = new Bun.Terminal({ cols: 100, rows: 30, data(_terminal, data) { terminalOutput += new TextDecoder().decode(data) } })
+    const tui = Bun.spawn([binary, "--server", baseUrl, "--print-logs"], { cwd: project, env, terminal, detached: true })
+    children.add(tui)
+    try { await run(terminal, async () => terminalOutput.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")) }
+    catch (error) { throw new Error(`${error}\nTUI output: ${terminalOutput.slice(-8000)}`) }
+    finally {
+      try { await terminate(tui) } finally { terminal.close() }
+    }
+  }
+  // With "/profile" completed in the prompt, runs it and picks alpha.
+  const pickAlpha = async (terminal: Bun.Terminal, opened: () => Promise<unknown>, current: typeof status) => {
+    terminal.write("\r")
+    // The first Enter accepts slash completion; the second runs it.
+    terminal.write("\r")
+    await opened()
+    // Active beta is first; the next picker row is alpha.
+    terminal.write("\u001b[B\r")
+    return eventually(current, (s: any) => s.active === "alpha" && s.phase === "ready")
+  }
   // Opt-in: load the published package by name instead of the copied dist.
-  // "1" means the unpinned name; any other value is used as the plugin spec.
   // It runs before the dist scenarios and restores their files afterwards.
-  const npmSpec = process.env.SMOKE_V2_NPM === "1" ? "opencode-profile-switcher-v2" : process.env.SMOKE_V2_NPM
   if (npmSpec) {
     const distConfig = readFileSync(join(config, "opencode.jsonc"), "utf8")
     const distProfiles = readFileSync(profilesPath, "utf8")
     await stop()
     json(join(config, "opencode.jsonc"), { ...JSON.parse(distConfig), plugins: ["*", npmSpec] })
+    const npmLogStart = output.length
     await start()
     // The location boots on its first request and installs package plugins
     // in the background; agents answer before the package is loaded.
     const listed = await eventually(async signal => (await client.plugin.list({ location, signal })).data.filter((p: any) => p.source.type !== "builtin"),
       plugins => plugins.length > 0 && plugins.every((p: any) => ["active", "failed"].includes(p.state.status)), 180_000)
-    assert.deepEqual(listed.map((p: any) => [p.id, p.source, p.features, p.state.status]), [["opencode-profile-switcher-v2", { type: "package", target: npmSpec, version: listed[0]?.source.version }, { server: true, tui: true, rpc: true }, "active"]])
-    // OpenCode 2.0.29 installs package plugins under its cache, keyed by name@spec.
-    const key = join(sandbox, "cache/opencode/npm", npmSpec.includes("@") ? npmSpec : `${npmSpec}@latest`)
+    // OpenCode 2.0.29 installs package plugins under its cache, keyed by
+    // name@spec, with the bare name keyed as name@latest.
+    const key = join(sandbox, "cache/opencode/npm", npmSpec === npmName ? `${npmName}@latest` : npmSpec)
     const generation = readdirSync(key).filter(name => /^\d+$/.test(name)).sort((a, b) => Number(a) - Number(b)).at(-1)!
-    const installedPlugin = join(key, generation, "node_modules/opencode-profile-switcher-v2")
-    assert.equal(read(join(installedPlugin, "package.json")).version, listed[0].source.version)
-    record("npm-install", { spec: npmSpec, directory: installedPlugin, version: listed[0].source.version })
+    const installedPlugin = join(key, generation, "node_modules", npmName)
+    const installedVersion = read(join(installedPlugin, "package.json")).version
+    assert.deepEqual(listed.map((p: any) => [p.id, p.source, p.features, p.state.status]), [[npmName, { type: "package", target: npmSpec, version: installedVersion }, { server: true, tui: true, rpc: true }, "active"]])
+    // An exact version pin must install that version, not latest.
+    const pinned = npmSpec.slice(npmName.length + 1)
+    if (/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(pinned)) assert.equal(installedVersion, pinned)
+    // The server must load the cached copy, not the dist copied into the
+    // install. The TUI logs its entrypoint only at debug level.
+    const npmLog = await eventually(async () => output.slice(npmLogStart), text => text.includes(`msg="loading plugin" id=${npmSpec} entrypoint=file://${installedPlugin}/dist/server.js`), 5_000)
+    assert(!npmLog.includes(plugin), "npm scenario loaded the copied dist")
+    record("npm-install", { spec: npmSpec, directory: installedPlugin, version: installedVersion, pinned: pinned || null })
     const npmRpc = client.rpc((await import(join(installedPlugin, "dist/rpc.js"))).ProfileSwitcherRpc)
     const npmStatus = (signal?: AbortSignal) => npmRpc.status({}, { location, signal })
     assert.equal((await eventually(npmStatus, (s: any) => s.phase === "ready")).path, profilesPath)
@@ -190,29 +231,16 @@ try {
     await npmRpc.switch({ profile: "beta" }, { location })
     assert.deepEqual((await agents()).find((a: any) => a.id === "plan").model, { providerID: "opencode", id: "space-bunny-free", variant: "low" })
     record("npm-rpc-switch")
-    let terminalOutput = ""
-    const terminal = new Bun.Terminal({ cols: 100, rows: 30, data(_terminal, data) { terminalOutput += new TextDecoder().decode(data) } })
-    const tui = Bun.spawn([binary, "--server", baseUrl, "--print-logs"], { cwd: project, env, terminal, detached: true })
-    children.add(tui)
-    const screen = async () => terminalOutput.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
-    try {
+    await withTui(async (terminal, screen) => {
       // Typing before the TUI has loaded its plugins loses the completion.
       await eventually(async () => {
         terminal.write("\u007f".repeat(8) + "/profile")
         await Bun.sleep(1000)
         return screen()
       }, text => text.includes("Switch model profile"), 60_000)
-      terminal.write("\r")
-      terminal.write("\r")
-      await eventually(screen, text => text.includes("Model profile"), 15_000)
-      // Active beta is first; the next picker row is alpha.
-      terminal.write("\u001b[B\r")
-      await eventually(npmStatus, (s: any) => s.active === "alpha" && s.phase === "ready", 15_000)
+      await pickAlpha(terminal, () => eventually(screen, text => text.includes("Model profile"), 15_000), npmStatus)
       record("npm-tui-profile-picker")
-    } catch (error) { throw new Error(`${error}\nTUI output: ${terminalOutput.slice(-8000)}`) }
-    finally {
-      try { await terminate(tui) } finally { terminal.close() }
-    }
+    })
     await stop()
     writeFileSync(join(config, "opencode.jsonc"), distConfig)
     writeFileSync(profilesPath, distProfiles)
@@ -330,11 +358,7 @@ export default { ...original, setup(ctx) {
     rmSync(trace, { force: true })
     if (explicit) json(join(config, "cli.json"), { plugins: [join(plugin, "dist")] })
     else rmSync(join(config, "cli.json"), { force: true })
-    let terminalOutput = ""
-    const terminal = new Bun.Terminal({ cols: 100, rows: 30, data(_terminal, data) { terminalOutput += new TextDecoder().decode(data) } })
-    const tui = Bun.spawn([binary, "--server", baseUrl, "--print-logs"], { cwd: project, env, terminal, detached: true })
-    children.add(tui)
-    try {
+    await withTui(async (terminal, screen) => {
       const entries = await eventually(async () => {
         try { return readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) } catch { return [] }
       }, entries => entries.some(e => e.event === "commands"), 20_000)
@@ -346,21 +370,12 @@ export default { ...original, setup(ctx) {
       record(name, entries)
       if (!explicit) {
         terminal.write("/profile")
-        await eventually(async () => terminalOutput.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ""), text => text.includes("Switch model profile"), 15_000)
-        terminal.write("\r")
-        // The first Enter accepts slash completion; the second runs it.
-        terminal.write("\r")
-        await eventually(async () => readFileSync(trace, "utf8"), text => text.includes('"event":"dialog-open","title":"Model profile"'), 15_000)
-        // Active beta is first; the next picker row is alpha.
-        terminal.write("\u001b[B\r")
-        const picked = await eventually(status, (s: any) => s.active === "alpha" && s.phase === "ready")
+        await eventually(screen, text => text.includes("Switch model profile"), 15_000)
+        const picked = await pickAlpha(terminal, () => eventually(async () => readFileSync(trace, "utf8"), text => text.includes('"event":"dialog-open","title":"Model profile"'), 15_000), status)
         assert.equal(picked.active, "alpha")
         record("tui-profile-picker", { active: picked.active })
       }
-    } catch (error) { throw new Error(`${error}\nTUI output: ${terminalOutput.slice(-8000)}`) }
-    finally {
-      try { await terminate(tui) } finally { terminal.close() }
-    }
+    })
   }
   await tuiProbe("tui-automatic", false)
   await tuiProbe("tui-both-sources-deduplicated", true)
