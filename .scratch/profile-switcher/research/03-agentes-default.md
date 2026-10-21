@@ -31,7 +31,7 @@ Los built-in se definen en código, en un mapa literal `agents` dentro del servi
 
 - `scout` (subagente read-only para investigar repos de dependencias) fue **agregado** como built-in en el commit `40d5ea1c` "feat(core): add scout agent for repo research (#24149)" (2026-05-08) y **removido** en `a639fe7a` "chore(opencode): remove scout agent (#30435)" (2026-06-02).
 - Verificado por tag: `v1.14.50` y `v1.15.0` tienen 8 built-in (incluyen `scout` en `packages/opencode/src/agent/agent.ts`); desde `v1.16.0` en adelante son los 7 listados arriba (verificado en v1.16.0, v1.17.0, v1.18.0, v1.18.10 y rama `dev`).
-- Ojo: la doc oficial está **desactualizada**: https://opencode.ai/docs/agents (y `packages/web/src/content/docs/agents.mdx` en el propio v1.18.10) todavía presenta a **General**, **Explore** y **Scout** como los tres subagentes built-in de opencode, pero `scout` ya no existe en el código de 1.18.10. Conclusión práctica: **la lista de built-in no es estable entre versiones; no conviene hardcodearla a ciegas** (ver §3).
+- Ojo: la doc oficial está **desactualizada**: https://opencode.ai/docs/agents (y `packages/web/src/content/docs/agents.mdx` en el propio v1.18.10) todavía dice "OpenCode comes with three built-in subagents, **General**, **Explore**, and **Scout**", pero `scout` ya no existe en el código de 1.18.10. Conclusión práctica: **la lista de built-in no es estable entre versiones; no conviene hardcodearla a ciegas** (ver §3).
 
 ---
 
@@ -96,7 +96,7 @@ Doc oficial (https://opencode.ai/docs/agents): "If you don't specify a model, pr
 3. Si no, heurística por familia dentro del provider actual: `smallModelFamilyPriority = ["gemini-flash", "gpt-nano", "claude-haiku"]` (línea 1982; casos especiales para opencode/copilot/bedrock/azure).
 4. Si nada matchea, `undefined` → el caller cae al modelo principal.
 
-Según la documentación (https://opencode.ai/docs/config), `small_model` configura un modelo separado para tareas livianas, como generar títulos. Por defecto, opencode intenta usar un modelo más barato del provider si hay uno disponible; si no, usa el modelo principal.
+Doc (https://opencode.ai/docs/config): "The `small_model` option configures a separate model for lightweight tasks like title generation. By default, OpenCode tries to use a cheaper model if one is available from your provider, otherwise it falls back to your main model."
 
 Consumidores en 1.18.10:
 - **`title`** (`packages/opencode/src/session/prompt.ts` líneas 216–221): `ag.model` (si el usuario configuró `agent.title.model`) → si no `getSmallModel(provider de la sesión)` → si no el modelo de la sesión. Es el único agente built-in que usa `small_model` por default.
