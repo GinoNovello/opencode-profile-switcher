@@ -1,6 +1,6 @@
 # La version para 2.0 se publica como paquete hermano
 
-OpenCode 1.x y 2.0 resuelven los mismos subpaths del paquete (`./server`, `./tui`) pero esperan modulos incompatibles, y un install sin version debe cargar siempre el codigo correcto. Por eso la version para 2.0 se publica como `opencode-profile-switcher-v2` y `opencode-profile-switcher` queda para 1.x; ambos salen del mismo repo y comparten el nucleo (perfiles, `profiles.json`, wizard e indicador puros), con un adaptador por host.
+opencode 1.x y 2.0 resuelven los mismos subpaths del paquete (`./server`, `./tui`) pero esperan modulos incompatibles, y un install sin version debe cargar siempre el codigo correcto. Por eso la version para 2.0 se publica como `opencode-profile-switcher-v2` y `opencode-profile-switcher` queda para 1.x; ambos salen del mismo repo y comparten el nucleo (perfiles, `profiles.json`, wizard e indicador puros), con un adaptador por host.
 
 ## Opciones consideradas
 
