@@ -1,6 +1,6 @@
 # opencode-profile-switcher
 
-Plugin de opencode que define perfiles de modelos y los switchea desde la UI sin editar config a mano. Hay una versión para OpenCode 1.x y otra para 2.0 (ADR-0004); los términos valen para ambas salvo donde se aclara.
+Plugin de opencode que define perfiles de modelos y los switchea desde la UI sin editar config a mano. Hay una versión para opencode 1.x y otra para 2.0 (ADR-0004); los términos valen para ambas salvo donde se aclara.
 
 ## Language
 

@@ -228,5 +228,5 @@ Restart opencode after updating. Keep both config entries pointing at
 
 - Human README: https://github.com/GinoNovello/opencode-profile-switcher
 - Issues: https://github.com/GinoNovello/opencode-profile-switcher/issues
-- OpenCode docs: https://opencode.ai/docs/
+- opencode docs: https://opencode.ai/docs/
 - This file (raw): https://raw.githubusercontent.com/GinoNovello/opencode-profile-switcher/main/docs/README.opencode.md

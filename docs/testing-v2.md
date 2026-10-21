@@ -1,4 +1,4 @@
-# Real OpenCode 2.0 smoke harness
+# Real opencode 2.0 smoke harness
 
 Run `bun run test:smoke:v2` from the repository root. This opt-in command builds
 `packages/v2`, then installs `@opencode/cli`, `@opencode/client`, and
@@ -9,13 +9,13 @@ support is required for the TUI probes.
 The harness passes an explicit environment to every child, equivalent to
 `env -i`: a private `HOME`, all four `XDG_*_HOME` directories, a basic system
 `PATH`, terminal type, and a random `OPENCODE_SERVER_PASSWORD`. It never invokes
-the global `opencode` command or reads the user's OpenCode configuration or
+the global `opencode` command or reads the user's opencode configuration or
 provider credentials. It starts its own `serve` on a dynamically reserved
 loopback port, authenticates as `opencode`, and attaches TUI children with
 `--server` to that address. It does not use the background service. An explicit
 sandbox `OPENCODE_CONFIG_DIR` is introduced only in the final scenario.
 
-OpenCode 2.0.29 also reads two things from outside the project directory. The
+opencode 2.0.29 also reads two things from outside the project directory. The
 sandbox lives under `TMPDIR`, so what it finds there depends on `TMPDIR`'s
 ancestors:
 
@@ -29,7 +29,7 @@ ancestors:
 Before installing anything, the harness fails if any of `.opencode`, `.claude`,
 `.agents`, `opencode.json`, `opencode.jsonc`, `.git`, `.hg` or `AGENTS.md`
 exists above the sandbox, checking the ancestors of both its path and its real
-path, since OpenCode resolves symlinks. An empty `.opencode`, `.claude` or `.agents`
+path, since opencode resolves symlinks. An empty `.opencode`, `.claude` or `.agents`
 directory is ignored, because it loads nothing. An ancestor the harness cannot
 read fails too. So `TMPDIR` must not be inside a git or Mercurial repository
 (a worktree, or a home directory kept as a dotfiles repo). The default `TMPDIR`
@@ -52,7 +52,7 @@ or `AGENTS.md` above the sandbox.
 
 ## Catalog and model selection
 
-The scenarios do not name fixed models. OpenCode 2.0.29 fetches its catalog
+The scenarios do not name fixed models. opencode 2.0.29 fetches its catalog
 from `https://models.opencode.ai/api.json` (its logs and cache key call it
 models.dev) and caches it in its database. A boot reads that cache first. Only
 without a cache does it start from a snapshot bundled in its binary, and then
@@ -102,7 +102,7 @@ Inference still goes to the public service. A model the catalog lists can
 still fail a real turn, and that fails the run.
 
 The copied build is frozen for the run under the sandbox installation. For a
-local plugin, OpenCode 2.0.29 expects a **directory with `server.js` and `tui.js`
+local plugin, opencode 2.0.29 expects a **directory with `server.js` and `tui.js`
 at its root**: the harness points `plugins` to the copied package's `dist`
 directory. Neither the package root containing only `dist/` nor a direct
 `server.js` path is an equivalent local plugin target. `"*"` retains the host's
